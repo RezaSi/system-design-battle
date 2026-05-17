@@ -5,7 +5,14 @@ on:
     branches:
       - main
     paths:
+      # Submission changes — re-bench only the changed challenge.
       - 'challenge-*/submissions/**'
+      # Grader / benchmark spec / workflow changes — re-bench every
+      # challenge so the scoreboard stays internally consistent
+      # (detect step decides which based on the file paths in the diff).
+      - 'scripts/**'
+      - 'challenge-*/benchmark/**'
+      - '.github/workflows/update-scoreboards.yml'
   workflow_dispatch:
     inputs:
       challenge:
@@ -70,9 +77,21 @@ jobs:
             CHANGED_FILES=$(git diff --name-only HEAD~5 HEAD 2>/dev/null \
                            || git diff --name-only HEAD~1 HEAD 2>/dev/null \
                            || echo "")
-            echo "$CHANGED_FILES" \
-              | grep -E '^challenge-[0-9]+/submissions/' \
-              | awk -F'/' '{print $1}' | sort -u > /tmp/changed_challenges.txt || true
+            # If the grader itself changed (scripts/, the workflow, or a
+            # benchmark spec under challenge-*/benchmark/), the existing
+            # numbers on every scoreboard are stale. Refresh all
+            # challenges in that case so the leaderboard stays
+            # internally consistent.
+            if echo "$CHANGED_FILES" | grep -qE '^(scripts/|\.github/workflows/update-scoreboards\.yml|challenge-[0-9]+/benchmark/)'; then
+              echo "Grader changed; refreshing all challenges."
+              git ls-tree -r --name-only HEAD \
+                | grep -E '^challenge-[0-9]+/submissions/' \
+                | awk -F'/' '{print $1}' | sort -u > /tmp/changed_challenges.txt || true
+            else
+              echo "$CHANGED_FILES" \
+                | grep -E '^challenge-[0-9]+/submissions/' \
+                | awk -F'/' '{print $1}' | sort -u > /tmp/changed_challenges.txt || true
+            fi
           fi
           if [ ! -s /tmp/changed_challenges.txt ]; then
             echo "No challenges to refresh."
