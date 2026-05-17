@@ -6,13 +6,12 @@
 >
 > - **Coverage** — percentage of functional tests passed.
 > - **RPS** — aggregated requests-per-second across the whole staged
->   load test (429 responses count as success, not failures).
+>   load test.
 > - **p99** — 99th percentile latency across the whole run.
-> - **Errors** — failure rate across the whole run (5xx / connection
->   errors only).
+> - **Errors** — failure rate across the whole run.
 >
 > Submissions are ranked by **coverage (desc) → RPS (desc) → p99 (asc)**.
 
 | Rank | Username | Coverage | RPS | p99 (ms) | Errors |
 |:----:|:---------|---------:|----:|---------:|-------:|
-| — | _no submissions yet_ | — | — | — | — |
+| 1 | RezaSi | 100.0% | 1968.3 | 890 | 0.00% |
