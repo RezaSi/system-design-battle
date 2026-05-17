@@ -13,4 +13,3 @@
 
 | Rank | Username | Grade | Coverage | Capacity (req/s) | p99 (ms) | Errors |
 |:----:|:---------|:-----:|---------:|-----------------:|---------:|-------:|
-| — | _no submissions yet_ | — | — | — | — | — |
