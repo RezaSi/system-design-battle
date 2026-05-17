@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Regenerate the top-10 leaderboard block in the root README.md.
+"""Regenerate the top-N leaderboard block in the root README.md.
 
-Reads the featured challenge's `SCOREBOARD.md`, takes the top entries,
-and rewrites the section between the `<!-- BEGIN_MAIN_LEADERBOARD -->`
-and `<!-- END_MAIN_LEADERBOARD -->` markers.
+Discovers every `challenge-*/SCOREBOARD.md`, takes the top entries from
+each, and rewrites the section between the `<!-- BEGIN_MAIN_LEADERBOARD -->`
+and `<!-- END_MAIN_LEADERBOARD -->` markers as one sub-section per
+challenge.
 
 Run by .github/workflows/update-scoreboards.yml after a merge.
 """
@@ -19,8 +20,10 @@ ROOT = Path(__file__).resolve().parent.parent
 README = ROOT / "README.md"
 BEGIN = "<!-- BEGIN_MAIN_LEADERBOARD -->"
 END = "<!-- END_MAIN_LEADERBOARD -->"
-FEATURED_CHALLENGE = "challenge-1"
 TOP_N = 10
+
+CHALLENGE_DIR_RE = re.compile(r"^challenge-(\d+)$")
+CHALLENGE_TITLE_RE = re.compile(r"^#\s+(Challenge\s+\d+\s*[—–-]\s*.+?)\s*$")
 
 
 def parse_scoreboard(path: Path) -> list[dict]:
@@ -60,7 +63,33 @@ def parse_scoreboard(path: Path) -> list[dict]:
     return rows
 
 
-def render_block(rows: list[dict]) -> str:
+def challenge_title(challenge_dir: Path) -> str:
+    """Return the H1 title of the challenge README, or a fallback."""
+    readme = challenge_dir / "README.md"
+    if readme.exists():
+        for line in readme.read_text().splitlines():
+            match = CHALLENGE_TITLE_RE.match(line)
+            if match:
+                return match.group(1).strip()
+    fallback = challenge_dir.name.replace("-", " ").title()
+    return fallback
+
+
+def discover_challenges() -> list[Path]:
+    """Return challenge directories sorted by their numeric suffix."""
+    discovered: list[tuple[int, Path]] = []
+    for path in ROOT.iterdir():
+        if not path.is_dir():
+            continue
+        match = CHALLENGE_DIR_RE.match(path.name)
+        if not match:
+            continue
+        discovered.append((int(match.group(1)), path))
+    discovered.sort(key=lambda item: item[0])
+    return [path for _, path in discovered]
+
+
+def render_table(rows: list[dict]) -> str:
     header = (
         "| Rank | Developer | Coverage | RPS | p99 (ms) |\n"
         "|:---:|:---|:---:|---:|---:|"
@@ -73,7 +102,22 @@ def render_block(rows: list[dict]) -> str:
             f"{row['coverage']} | {row['rps']} | {row['p99']} |"
             for row in rows[:TOP_N]
         )
-    return f"{BEGIN}\n{header}\n{body}\n{END}"
+    return f"{header}\n{body}"
+
+
+def render_block(challenges: list[Path]) -> str:
+    if not challenges:
+        return f"{BEGIN}\n_no challenges yet_\n{END}"
+
+    sections: list[str] = []
+    for challenge_dir in challenges:
+        title = challenge_title(challenge_dir)
+        scoreboard = challenge_dir / "SCOREBOARD.md"
+        rows = parse_scoreboard(scoreboard)
+        sections.append(f"### {title}\n\n{render_table(rows)}")
+
+    body = "\n\n".join(sections)
+    return f"{BEGIN}\n{body}\n{END}"
 
 
 def main() -> int:
@@ -81,11 +125,10 @@ def main() -> int:
         print(f"README not found at {README}", file=sys.stderr)
         return 1
 
-    scoreboard = ROOT / FEATURED_CHALLENGE / "SCOREBOARD.md"
-    rows = parse_scoreboard(scoreboard)
+    challenges = discover_challenges()
+    block = render_block(challenges)
 
     content = README.read_text()
-    block = render_block(rows)
     pattern = re.compile(
         re.escape(BEGIN) + r".*?" + re.escape(END),
         flags=re.DOTALL,

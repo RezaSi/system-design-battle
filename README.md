@@ -84,16 +84,24 @@ runners. Your laptop will produce different absolute numbers, but the
 internal ranking is consistent because every submission is re-run on
 the same CI runner on every merge.
 
-## Top 10 (Challenge 1)
+## Leaderboards
 
-Updated automatically when PRs are merged. See each challenge's
-`SCOREBOARD.md` for the full table. Sorted by coverage (desc), then
-RPS (desc), then p99 (asc).
+Top 10 per challenge, updated automatically when PRs are merged. See
+each challenge's `SCOREBOARD.md` for the full table. Sorted by coverage
+(desc), then RPS (desc), then p99 (asc).
 
 <!-- BEGIN_MAIN_LEADERBOARD -->
+### Challenge 1 — URL Shortener
+
 | Rank | Developer | Coverage | RPS | p99 (ms) |
 |:---:|:---|:---:|---:|---:|
 | 1 | [RezaSi](https://github.com/RezaSi) | 100.0% | 1067.5 | 2300 |
+
+### Challenge 2 — Rate-Limited API
+
+| Rank | Developer | Coverage | RPS | p99 (ms) |
+|:---:|:---|:---:|---:|---:|
+| 1 | [RezaSi](https://github.com/RezaSi) | 100.0% | 2308.3 | 790 |
 <!-- END_MAIN_LEADERBOARD -->
 
 ## The challenges
