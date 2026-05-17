@@ -9,7 +9,7 @@ on:
   workflow_dispatch:
     inputs:
       challenge:
-        description: 'Specific challenge to refresh (e.g. challenge-1). Leave empty to auto-detect from the latest commits.'
+        description: 'Specific challenge to refresh (e.g. challenge-1). Leave empty to refresh every challenge that has submissions.'
         required: false
         type: string
 
@@ -46,9 +46,18 @@ jobs:
         run: |
           set -euo pipefail
           MANUAL="${{ github.event.inputs.challenge }}"
+          EVENT="${{ github.event_name }}"
           if [ -n "$MANUAL" ]; then
             # Manual workflow_dispatch with an explicit challenge.
             echo "$MANUAL" > /tmp/changed_challenges.txt
+          elif [ "$EVENT" = "workflow_dispatch" ]; then
+            # Manual dispatch with no specific challenge: refresh every
+            # challenge that has at least one submission. Useful after
+            # changing the grader itself (scripts/, workflows/) without
+            # touching any submission file.
+            git ls-tree -r --name-only HEAD \
+              | grep -E '^challenge-[0-9]+/submissions/' \
+              | awk -F'/' '{print $1}' | sort -u > /tmp/changed_challenges.txt || true
           elif ! git rev-parse HEAD~1 >/dev/null 2>&1; then
             # Initial commit (no parent). Refresh every challenge that
             # has at least one submission so the scoreboard isn't stuck
