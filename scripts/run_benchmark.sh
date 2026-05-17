@@ -186,12 +186,23 @@ fi
 echo "=== Running staged load test (Locust) ==="
 LOCUST_CSV_PREFIX="$OUTPUT_DIR/locust"
 LOCUST_EXIT=0
+# Run Locust with worker processes so the load generator itself is not
+# the bottleneck. A single-process Locust easily saturates one CPU
+# under a few hundred users and starts reporting client-side queuing
+# delay as if it were server latency. With --processes N, the master
+# distributes users across N forked workers on the same host.
+#
+# Default: 2 workers. Override with LOCUST_PROCESSES=4 (etc.) when you
+# know the host has spare cores. On a 4 vCPU CI runner with a 1 vCPU
+# submission stack, 2 workers leaves ~1 core for the OS and Docker.
+LOCUST_PROCESSES="${LOCUST_PROCESSES:-2}"
 if [ "${SKIP_LOAD:-0}" != "1" ]; then
     set +e
     python3 -m locust \
         -f "$CHALLENGE_DIR/benchmark/locustfile.py" \
         --headless \
         --host "$HOST_URL" \
+        --processes "$LOCUST_PROCESSES" \
         --users 10 --spawn-rate 10 \
         --run-time "${TOTAL_DURATION_S}s" \
         --csv "$LOCUST_CSV_PREFIX" \

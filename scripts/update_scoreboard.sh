@@ -117,7 +117,11 @@ if [ "$HAS_ANY" = "0" ]; then
 fi
 
 # Sort: grade_rank desc (col 3), capacity desc (col 5), p99 asc (col 6).
-sort -t $'\t' -k3,3 -nr -k5,5 -gr -k6,6 -g "$ROWS_FILE" > "$ROWS_FILE.sorted"
+# Per-key flags are required here; -n and -g are mutually exclusive when
+# given as global flags, but each can be attached to its own key with
+# the `KEYnr` / `KEYg` shorthand. `-g` handles both ints and floats so
+# we use it everywhere.
+sort -t "$(printf '\t')" -k3,3gr -k5,5gr -k6,6g "$ROWS_FILE" > "$ROWS_FILE.sorted"
 
 RANK=0
 while IFS=$'\t' read -r u grade _grank cov cap p99 err; do

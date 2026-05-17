@@ -385,9 +385,12 @@ def render_report(coverage: dict, benchmark: dict, challenge: str, submission: s
     stage_rows = []
     for stage in benchmark.get("per_stage", []):
         scored_marker = "" if stage.get("scored", True) else " _(warmup)_"
-        slo_marker = "PASS" if stage.get("met_slo") else "—"
         if not stage.get("scored", True):
             slo_marker = "—"
+        elif stage.get("met_slo"):
+            slo_marker = "PASS"
+        else:
+            slo_marker = "FAIL"
         stage_rows.append(
             f"| {stage['name']}{scored_marker} | {stage['users']} | "
             f"{stage['rps']:.0f} | {stage['p50_ms']} | {stage['p90_ms']} | "

@@ -104,17 +104,33 @@ jobs:
           fi
           CHALLENGES=$(tr '\n' ' ' < /tmp/changed_challenges.txt)
           git commit -m "scoreboard: refresh $CHALLENGES"
+          PUSHED=0
           for attempt in 1 2 3 4 5; do
             echo "Push attempt $attempt"
             git fetch origin main
+            # If a sibling run already pushed an identical scoreboard
+            # (different commit SHA, same tree contents on the files we
+            # care about), there is nothing to do. Without this guard we
+            # would force a non-fast-forward push of our local commit
+            # against an already-up-to-date remote and loop forever.
+            if git diff --quiet origin/main -- 'challenge-*/SCOREBOARD.md' 'README.md'; then
+              echo "Remote already has the same scoreboard contents. Nothing to push."
+              PUSHED=1
+              break
+            fi
             if ! git diff --quiet HEAD origin/main; then
               git rebase origin/main || { git rebase --abort 2>/dev/null || true; git merge origin/main -m "Merge remote"; }
             fi
             if git push origin HEAD:main; then
               echo "Pushed successfully."
+              PUSHED=1
               break
             fi
             sleep $attempt
           done
+          if [ "$PUSHED" = "0" ]; then
+            echo "::error::All 5 push attempts failed. The scoreboard on main may be stale."
+            exit 1
+          fi
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
