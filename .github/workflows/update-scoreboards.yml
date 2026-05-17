@@ -1,0 +1,120 @@
+name: Update Scoreboards
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'challenge-*/submissions/**'
+  workflow_dispatch:
+    inputs:
+      challenge:
+        description: 'Specific challenge to refresh (e.g. challenge-1). Leave empty to auto-detect from the latest commits.'
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: update-scoreboards
+  cancel-in-progress: false
+
+jobs:
+  update:
+    if: github.repository == 'RezaSi/system-design-battle'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 10
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install grader dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r scripts/requirements.txt
+
+      - name: Detect challenges to refresh
+        id: detect
+        run: |
+          set -euo pipefail
+          MANUAL="${{ github.event.inputs.challenge }}"
+          if [ -n "$MANUAL" ]; then
+            # Manual workflow_dispatch with an explicit challenge.
+            echo "$MANUAL" > /tmp/changed_challenges.txt
+          elif ! git rev-parse HEAD~1 >/dev/null 2>&1; then
+            # Initial commit (no parent). Refresh every challenge that
+            # has at least one submission so the scoreboard isn't stuck
+            # at "no submissions yet" after the first push.
+            git ls-tree -r --name-only HEAD \
+              | grep -E '^challenge-[0-9]+/submissions/' \
+              | awk -F'/' '{print $1}' | sort -u > /tmp/changed_challenges.txt || true
+          else
+            # Normal post-merge push: diff against parent.
+            CHANGED_FILES=$(git diff --name-only HEAD~5 HEAD 2>/dev/null \
+                           || git diff --name-only HEAD~1 HEAD 2>/dev/null \
+                           || echo "")
+            echo "$CHANGED_FILES" \
+              | grep -E '^challenge-[0-9]+/submissions/' \
+              | awk -F'/' '{print $1}' | sort -u > /tmp/changed_challenges.txt || true
+          fi
+          if [ ! -s /tmp/changed_challenges.txt ]; then
+            echo "No challenges to refresh."
+            echo "has_changes=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "Challenges to refresh:"
+          cat /tmp/changed_challenges.txt
+          echo "has_changes=true" >> "$GITHUB_OUTPUT"
+
+      - name: Refresh scoreboards
+        if: steps.detect.outputs.has_changes == 'true'
+        run: |
+          set -euo pipefail
+          chmod +x scripts/update_scoreboard.sh
+          chmod +x scripts/run_benchmark.sh
+          chmod +x scripts/parse_results.py
+          while IFS= read -r challenge; do
+            [ -n "$challenge" ] || continue
+            echo "==== Updating scoreboard for $challenge ===="
+            scripts/update_scoreboard.sh "$challenge" || echo "Failed to update $challenge (continuing)"
+          done < /tmp/changed_challenges.txt
+
+      - name: Regenerate main leaderboard in README
+        if: steps.detect.outputs.has_changes == 'true'
+        run: python3 scripts/generate_main_scoreboard.py
+
+      - name: Commit and push updates
+        if: steps.detect.outputs.has_changes == 'true'
+        run: |
+          set -euo pipefail
+          git config user.name "GitHub Actions"
+          git config user.email "actions@github.com"
+          git add challenge-*/SCOREBOARD.md README.md 2>/dev/null || true
+          if git diff --staged --quiet; then
+            echo "No scoreboard changes to commit."
+            exit 0
+          fi
+          CHALLENGES=$(tr '\n' ' ' < /tmp/changed_challenges.txt)
+          git commit -m "scoreboard: refresh $CHALLENGES"
+          for attempt in 1 2 3 4 5; do
+            echo "Push attempt $attempt"
+            git fetch origin main
+            if ! git diff --quiet HEAD origin/main; then
+              git rebase origin/main || { git rebase --abort 2>/dev/null || true; git merge origin/main -m "Merge remote"; }
+            fi
+            if git push origin HEAD:main; then
+              echo "Pushed successfully."
+              break
+            fi
+            sleep $attempt
+          done
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

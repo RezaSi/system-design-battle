@@ -1,0 +1,24 @@
+services:
+  # The grader enforces a stack-wide resource budget (see the challenge
+  # README for the exact CPU and memory numbers). Every service you add
+  # must declare both `cpus:` and `mem_limit:`. The grader sums these
+  # values across services and rejects the submission if the total is
+  # over budget. How you split the budget is up to you — that's part of
+  # the design.
+  #
+  # This template starts as a single container that gets the whole
+  # budget. The moment you add a database or cache, you have to take CPU
+  # and memory away from `app` and give it to the new service.
+  app:
+    build: .
+    cpus: 1.0
+    mem_limit: 1024m
+    ports:
+      - "8080:8080"
+    environment:
+      PYTHONUNBUFFERED: "1"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys;urllib.request.urlopen('http://localhost:8080/healthz',timeout=2);sys.exit(0)"]
+      interval: 5s
+      timeout: 3s
+      retries: 10

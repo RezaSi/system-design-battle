@@ -1,0 +1,30 @@
+port: 8080
+host: http://localhost:8080
+health_path: /healthz
+warmup_seconds: 3
+
+# Resource budget enforced on the submission stack. Total across all
+# services in the submission's docker-compose.yml. The grader divides
+# this equally per service (with a 0.25 CPU / 256 MB floor) and writes
+# a .sdb-grader-override.yml to enforce it.
+resource_budget:
+  cpus: 1.0
+  memory_mb: 1024
+
+# Service Level Objective the bench grades against. A "passing" load
+# stage must have p99 <= slo.p99_ms AND error_rate <= slo.error_rate_pct.
+# The "capacity" RPS on the scoreboard is the highest sustained RPS that
+# still met the SLO.
+slo:
+  p99_ms: 25
+  error_rate_pct: 1.0
+
+# Staged load profile. The bench runs a single Locust process driving a
+# LoadTestShape that walks these stages in order. The first stage is a
+# warmup and is not counted toward the SLO / capacity calculation.
+load_stages:
+  - { name: "warmup",     users: 20,  spawn_rate: 20,  duration_s: 15, scored: false }
+  - { name: "light",      users: 50,  spawn_rate: 30,  duration_s: 20, scored: true  }
+  - { name: "target",     users: 150, spawn_rate: 100, duration_s: 20, scored: true  }
+  - { name: "heavy",      users: 400, spawn_rate: 250, duration_s: 20, scored: true  }
+  - { name: "saturation", users: 800, spawn_rate: 400, duration_s: 20, scored: true  }

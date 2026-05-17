@@ -1,0 +1,279 @@
+name: PR Tests
+
+on:
+  pull_request:
+    branches:
+      - main
+    types:
+      - opened
+      - synchronize
+      - reopened
+      - labeled
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  validate-submission:
+    name: Validate submission scope
+    runs-on: ubuntu-latest
+    outputs:
+      validation_passed: ${{ steps.validate.outputs.validation_passed }}
+      manual_approval_needed: ${{ steps.validate.outputs.manual_approval_needed }}
+      changed_submissions: ${{ steps.validate.outputs.changed_submissions }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+
+      - name: Validate changed paths against PR author
+        id: validate
+        env:
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+          HAS_APPROVAL_LABEL: ${{ contains(github.event.pull_request.labels.*.name, 'manual-approval-granted') }}
+        run: |
+          set -euo pipefail
+          USERNAME_LOWER=$(echo "$PR_AUTHOR" | tr '[:upper:]' '[:lower:]')
+          echo "PR author (normalized): $USERNAME_LOWER"
+
+          git fetch origin main --depth=1
+          CHANGED=$(git diff --name-only origin/main...HEAD || true)
+          echo "Changed files:"
+          echo "$CHANGED"
+
+          # Files that are NOT inside a submission directory
+          NON_SUBMISSION=$(echo "$CHANGED" | grep -vE '^challenge-[0-9]+/submissions/' || true)
+
+          # Submission folders touched by this PR
+          SUBMISSIONS=$(echo "$CHANGED" | grep -E '^challenge-[0-9]+/submissions/' | awk -F'/' '{print $1"/submissions/"$3}' | sort -u || true)
+
+          MANUAL_APPROVAL_NEEDED="false"
+          VALIDATION_PASSED="true"
+
+          if [ -n "$NON_SUBMISSION" ]; then
+            if [ "$HAS_APPROVAL_LABEL" = "true" ]; then
+              echo "Manual-approval label present: allowing non-submission changes."
+            else
+              echo "PR touches files outside challenge-*/submissions/. Manual approval required."
+              echo "$NON_SUBMISSION"
+              MANUAL_APPROVAL_NEEDED="true"
+              VALIDATION_PASSED="false"
+            fi
+          fi
+
+          # Reject submissions that target another user's folder
+          INVALID=""
+          while IFS= read -r line; do
+            [ -n "$line" ] || continue
+            OWNER=$(echo "$line" | awk -F'/' '{print $3}')
+            OWNER_LOWER=$(echo "$OWNER" | tr '[:upper:]' '[:lower:]')
+            if [ "$OWNER_LOWER" != "$USERNAME_LOWER" ]; then
+              INVALID="$INVALID $line"
+            fi
+          done <<< "$SUBMISSIONS"
+
+          if [ -n "$INVALID" ]; then
+            if [ "$HAS_APPROVAL_LABEL" = "true" ]; then
+              echo "Manual-approval label present: allowing cross-user submission edits ($INVALID)."
+            else
+              echo "PR modifies submissions belonging to another user:$INVALID"
+              echo "You can only touch challenge-*/submissions/$PR_AUTHOR/"
+              VALIDATION_PASSED="false"
+            fi
+          fi
+
+          # Build the JSON matrix of changed submission folders
+          if [ -z "$SUBMISSIONS" ]; then
+            MATRIX="[]"
+          else
+            MATRIX=$(echo "$SUBMISSIONS" | python3 -c 'import json,sys; print(json.dumps([l.strip() for l in sys.stdin if l.strip()]))')
+          fi
+          echo "Matrix: $MATRIX"
+
+          echo "validation_passed=$VALIDATION_PASSED" >> "$GITHUB_OUTPUT"
+          echo "manual_approval_needed=$MANUAL_APPROVAL_NEEDED" >> "$GITHUB_OUTPUT"
+          echo "changed_submissions=$MATRIX" >> "$GITHUB_OUTPUT"
+
+          if [ "$VALIDATION_PASSED" != "true" ]; then
+            exit 1
+          fi
+
+  manual-approval-status:
+    name: Manual approval required
+    needs: validate-submission
+    if: needs.validate-submission.outputs.manual_approval_needed == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Block until label applied
+        run: |
+          echo "This PR modifies files outside challenge-*/submissions/."
+          echo "A maintainer needs to add the 'manual-approval-granted' label,"
+          echo "then re-run this workflow."
+          exit 1
+
+  no-submissions-changed:
+    name: No submission changes
+    needs: validate-submission
+    if: needs.validate-submission.outputs.validation_passed == 'true' && needs.validate-submission.outputs.changed_submissions == '[]'
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          echo "PR is valid but does not touch any challenge-*/submissions/ folder."
+          echo "Nothing to benchmark."
+
+  benchmark-submission:
+    name: Benchmark ${{ matrix.submission }}
+    needs: validate-submission
+    if: needs.validate-submission.outputs.validation_passed == 'true' && needs.validate-submission.outputs.changed_submissions != '[]'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        submission: ${{ fromJson(needs.validate-submission.outputs.changed_submissions) }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install grader dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r scripts/requirements.txt
+
+      - name: Resolve challenge directory
+        id: paths
+        run: |
+          set -euo pipefail
+          SUBMISSION="${{ matrix.submission }}"
+          CHALLENGE=$(echo "$SUBMISSION" | awk -F'/' '{print $1}')
+          USERNAME=$(echo "$SUBMISSION" | awk -F'/' '{print $3}')
+          echo "challenge=$CHALLENGE" >> "$GITHUB_OUTPUT"
+          echo "username=$USERNAME" >> "$GITHUB_OUTPUT"
+          echo "results_dir=results/$CHALLENGE/$USERNAME" >> "$GITHUB_OUTPUT"
+
+      - name: Run benchmark
+        id: bench
+        run: |
+          set -euo pipefail
+          mkdir -p "${{ steps.paths.outputs.results_dir }}"
+          chmod +x scripts/run_benchmark.sh
+          chmod +x scripts/parse_results.py
+          if scripts/run_benchmark.sh \
+              "${{ steps.paths.outputs.challenge }}" \
+              "${{ matrix.submission }}" \
+              "${{ steps.paths.outputs.results_dir }}"; then
+            echo "status=success" >> "$GITHUB_OUTPUT"
+          else
+            echo "status=failure" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
+
+      - name: Upload benchmark artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-${{ steps.paths.outputs.challenge }}-${{ steps.paths.outputs.username }}
+          path: ${{ steps.paths.outputs.results_dir }}/
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Compose benchmark comment
+        if: always()
+        id: comment
+        run: |
+          set -euo pipefail
+          REPORT="${{ steps.paths.outputs.results_dir }}/benchmark-report.md"
+          {
+            echo "<!-- sdb-benchmark:${{ steps.paths.outputs.challenge }}/${{ steps.paths.outputs.username }} -->"
+            if [ -f "$REPORT" ]; then
+              cat "$REPORT"
+            else
+              echo "## Benchmark report — ${{ steps.paths.outputs.challenge }}"
+              echo ""
+              echo "Submission: \`${{ steps.paths.outputs.username }}\`"
+              echo ""
+              echo "The grader did not produce a report. The most common causes are:"
+              echo ""
+              echo "- \`docker compose up\` failed to build or start."
+              echo "- The service did not respond on \`/healthz\` within 60 seconds."
+              echo "- The benchmark crashed before writing artifacts."
+              echo ""
+              echo "Check the workflow logs above for the exact error."
+            fi
+            echo ""
+            echo "---"
+            echo "Benchmark workflow run: [\`${GITHUB_RUN_ID}\`](${{ github.server_url }}/${{ github.repository }}/actions/runs/${GITHUB_RUN_ID})"
+          } > /tmp/comment.md
+          {
+            echo "body<<EOF_COMMENT"
+            cat /tmp/comment.md
+            echo "EOF_COMMENT"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Post or update PR comment
+        if: always()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const marker = `<!-- sdb-benchmark:${{ steps.paths.outputs.challenge }}/${{ steps.paths.outputs.username }} -->`;
+            const body = `${{ steps.comment.outputs.body }}`;
+            const { data: existing } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              per_page: 100,
+            });
+            const mine = existing.find(c => c.body && c.body.includes(marker));
+            if (mine) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: mine.id,
+                body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body,
+              });
+            }
+
+  pr-status:
+    name: PR status
+    runs-on: ubuntu-latest
+    needs: [validate-submission, manual-approval-status, no-submissions-changed, benchmark-submission]
+    if: always()
+    steps:
+      - name: Aggregate results
+        run: |
+          echo "validate-submission:    ${{ needs.validate-submission.result }}"
+          echo "manual-approval-status: ${{ needs.manual-approval-status.result }}"
+          echo "no-submissions-changed: ${{ needs.no-submissions-changed.result }}"
+          echo "benchmark-submission:   ${{ needs.benchmark-submission.result }}"
+
+          if [ "${{ needs.validate-submission.result }}" = "failure" ]; then
+            echo "Validation failed."
+            exit 1
+          fi
+          if [ "${{ needs.manual-approval-status.result }}" = "failure" ]; then
+            echo "Manual approval required."
+            exit 1
+          fi
+          if [ "${{ needs.benchmark-submission.result }}" = "failure" ]; then
+            echo "One or more benchmarks failed."
+            exit 1
+          fi
+          echo "PR passed all checks."

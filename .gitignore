@@ -1,0 +1,27 @@
+# Editors / OS
+.idea/
+.vscode/
+.DS_Store
+*/.DS_Store
+.cursor/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+
+# Local benchmark artifacts
+results/
+benchmark-report.md
+locust_stats*.csv
+locust_stats*.html
+*.csv
+
+# Environment files
+.env
+*.env.local
+
+# Grader's resource-cap override (auto-removed by the grader, but just in case)
+.sdb-grader-override.yml

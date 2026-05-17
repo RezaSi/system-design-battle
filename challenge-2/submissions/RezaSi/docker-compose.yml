@@ -1,0 +1,19 @@
+services:
+  # Single-container submission: the in-process sharded sliding-window
+  # counter doesn't need any backing store, so `app` gets the whole
+  # 1 CPU / 1024 MB budget. A distributed limiter that wanted to share
+  # state across replicas would have to split this budget with Redis or
+  # a coordinator service.
+  app:
+    build: .
+    cpus: 1.0
+    mem_limit: 1024m
+    ports:
+      - "8080:8080"
+    environment:
+      PYTHONUNBUFFERED: "1"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys;urllib.request.urlopen('http://localhost:8080/healthz',timeout=2);sys.exit(0)"]
+      interval: 5s
+      timeout: 3s
+      retries: 10

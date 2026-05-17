@@ -1,0 +1,114 @@
+name: Auto Merge Ready PRs
+
+on:
+  schedule:
+    # Every 2 hours
+    - cron: '0 */2 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+  checks: read
+
+jobs:
+  auto-merge:
+    runs-on: ubuntu-latest
+    if: github.repository == 'RezaSi/system-design-battle'
+
+    steps:
+      - name: Auto-merge eligible PRs
+        uses: actions/github-script@v7
+        with:
+          script: |
+            // Wait this long after pr-status went green before auto-merging.
+            const COOLDOWN_MS = 24 * 60 * 60 * 1000;
+            const MAX_MERGES_PER_RUN = 10;
+            const now = new Date();
+            let merged = 0;
+
+            const { data: prs } = await github.rest.pulls.list({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              base: 'main',
+              per_page: 100,
+            });
+
+            for (const pr of prs) {
+              if (merged >= MAX_MERGES_PER_RUN) break;
+
+              const labels = pr.labels.map(l => l.name);
+              if (labels.includes('do-not-merge')) {
+                console.log(`PR #${pr.number}: skip (do-not-merge label)`);
+                continue;
+              }
+
+              const { data: checks } = await github.rest.checks.listForRef({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                ref: pr.head.sha,
+              });
+              const prStatus = checks.check_runs.find(c => c.name === 'PR status');
+              if (!prStatus) {
+                console.log(`PR #${pr.number}: skip (no PR status check)`);
+                continue;
+              }
+              if (prStatus.conclusion !== 'success') {
+                console.log(`PR #${pr.number}: skip (PR status = ${prStatus.conclusion})`);
+                continue;
+              }
+
+              const elapsed = now - new Date(prStatus.completed_at);
+              if (elapsed < COOLDOWN_MS) {
+                const left = Math.ceil((COOLDOWN_MS - elapsed) / (60 * 60 * 1000));
+                console.log(`PR #${pr.number}: skip (cooldown, ${left}h remaining)`);
+                continue;
+              }
+
+              let details = (await github.rest.pulls.get({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                pull_number: pr.number,
+              })).data;
+
+              if (details.mergeable === null) {
+                await new Promise(r => setTimeout(r, 5000));
+                details = (await github.rest.pulls.get({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  pull_number: pr.number,
+                })).data;
+              }
+              if (!['clean', 'unstable'].includes(details.mergeable_state)) {
+                console.log(`PR #${pr.number}: skip (mergeable_state=${details.mergeable_state})`);
+                continue;
+              }
+
+              try {
+                await github.rest.pulls.merge({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  pull_number: pr.number,
+                  merge_method: 'squash',
+                  commit_title: `${pr.title} (#${pr.number})`,
+                  commit_message:
+                    `Auto-merged after cool-down with all checks green.\n\n` +
+                    `Author: @${pr.user.login}`,
+                });
+                merged += 1;
+                await github.rest.issues.createComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: pr.number,
+                  body:
+                    `Auto-merged. Thanks for the submission, @${pr.user.login}.\n\n` +
+                    `Scoreboards will refresh shortly.`,
+                });
+                console.log(`PR #${pr.number}: merged`);
+              } catch (err) {
+                console.log(`PR #${pr.number}: failed to merge — ${err.message}`);
+              }
+            }
+
+            console.log(`Auto-merge run complete. Merged ${merged} PR(s).`);

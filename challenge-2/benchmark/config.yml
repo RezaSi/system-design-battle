@@ -1,0 +1,27 @@
+port: 8080
+host: http://localhost:8080
+health_path: /healthz
+warmup_seconds: 3
+
+# Same 1 vCPU / 1 GB envelope as challenge-1. The bench enforces this
+# by emitting a .sdb-grader-override.yml that caps every service.
+resource_budget:
+  cpus: 1.0
+  memory_mb: 1024
+
+# A rate-limited API has two failure modes:
+#   - wrong status (anything other than 200 or 429) -> counted as error
+#   - slow response under load -> p99 climbs
+# 429s are NOT errors — they are the limiter doing its job. The Locust
+# tasks already mark 429 as success, so error_rate here only counts the
+# real failures (5xx, connection errors, etc.).
+slo:
+  p99_ms: 25
+  error_rate_pct: 1.0
+
+load_stages:
+  - { name: "warmup",     users: 30,  spawn_rate: 30,  duration_s: 15, scored: false }
+  - { name: "light",      users: 100, spawn_rate: 50,  duration_s: 20, scored: true  }
+  - { name: "target",     users: 300, spawn_rate: 150, duration_s: 20, scored: true  }
+  - { name: "heavy",      users: 800, spawn_rate: 400, duration_s: 20, scored: true  }
+  - { name: "saturation", users: 1500, spawn_rate: 750, duration_s: 20, scored: true  }
