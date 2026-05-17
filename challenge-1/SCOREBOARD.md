@@ -14,4 +14,4 @@
 
 | Rank | Username | Coverage | RPS | p99 (ms) | Errors |
 |:----:|:---------|---------:|----:|---------:|-------:|
-| — | _no submissions yet_ | — | — | — | — |
+| 1 | RezaSi | 100.0% | 970.0 | 650 | 0.00% |
