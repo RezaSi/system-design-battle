@@ -28,7 +28,7 @@ def parse_scoreboard(path: Path) -> list[dict]:
 
     The expected table shape is:
 
-    | Rank | Username | Grade | Coverage | Capacity (req/s) | p99 (ms) | Errors |
+    | Rank | Username | Coverage | RPS | p99 (ms) | Errors |
     """
     rows: list[dict] = []
     if not path.exists():
@@ -37,7 +37,7 @@ def parse_scoreboard(path: Path) -> list[dict]:
         if not line.startswith("|"):
             continue
         cells = [c.strip() for c in line.strip("|").split("|")]
-        if len(cells) < 7:
+        if len(cells) < 6:
             continue
         if cells[0].lower() == "rank" or set(cells[0]) <= {":", "-"}:
             continue
@@ -51,11 +51,10 @@ def parse_scoreboard(path: Path) -> list[dict]:
             {
                 "rank": rank,
                 "username": cells[1].strip("` "),
-                "grade": cells[2],
-                "coverage": cells[3],
-                "capacity": cells[4],
-                "p99": cells[5],
-                "errors": cells[6],
+                "coverage": cells[2],
+                "rps": cells[3],
+                "p99": cells[4],
+                "errors": cells[5],
             }
         )
     return rows
@@ -63,15 +62,15 @@ def parse_scoreboard(path: Path) -> list[dict]:
 
 def render_block(rows: list[dict]) -> str:
     header = (
-        "| Rank | Developer | Grade | Coverage | Capacity (req/s) | p99 (ms) |\n"
-        "|:---:|:---|:---:|:---:|:---:|:---:|"
+        "| Rank | Developer | Coverage | RPS | p99 (ms) |\n"
+        "|:---:|:---|:---:|---:|---:|"
     )
     if not rows:
-        body = "| — | _no submissions yet_ | — | — | — | — |"
+        body = "| — | _no submissions yet_ | — | — | — |"
     else:
         body = "\n".join(
             f"| {row['rank']} | [{row['username']}](https://github.com/{row['username']}) | "
-            f"**{row['grade']}** | {row['coverage']} | {row['capacity']} | {row['p99']} |"
+            f"{row['coverage']} | {row['rps']} | {row['p99']} |"
             for row in rows[:TOP_N]
         )
     return f"{BEGIN}\n{header}\n{body}\n{END}"

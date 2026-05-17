@@ -52,21 +52,18 @@ cd ../../..        # back to repo root
 
 ## Performance notes
 
-Under the strict SLO (`p99 ≤ 25 ms`), this reference reliably hits 100%
-coverage but pays an inter-container hop on every Mongo round-trip. On
-a typical run it lands at **Grade D** — correct, durable, but unable to
-hold 25 ms p99 at any scored stage because Mongo writes add a few ms
-each. The lesson the bench is teaching here is real: a 3-service stack
-is the textbook design for a URL shortener, but under a tight SLO and a
-shared 1.0 CPU / 1024 MB envelope it loses to a lean single-container
-design.
+This reference reliably hits 100% coverage and is fully durable, but
+it pays an inter-container hop on every Mongo round-trip. On a typical
+run it lands at a few hundred RPS aggregated, with p99 in the
+hundreds-of-ms range under the heavier load stages — the cost of a
+3-service stack with a real document store on a 1-CPU budget.
 
 If you want to beat this on the leaderboard, plausible angles:
 
 - **Collapse to a single container with SQLite on a volume.** No
   inter-process hops, the whole 1.0 / 1024 budget on one process,
-  durability via the named volume. This is the obvious top-of-leaderboard
-  shape under the current SLO.
+  durability via the named volume. Lowest tail latency by a wide
+  margin.
 - Drop the async overhead — Go or Rust will easily out-throughput
   Python at the same caps.
 - Skip Redis entirely and use an in-process LRU layered on the durable

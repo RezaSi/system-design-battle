@@ -56,8 +56,8 @@ If you depend on Postgres or Redis, either:
 The load test in `benchmark/config.yml` walks five stages: a 20-user
 warmup, then 50, 150, 400, and 800 concurrent users. Roughly 70% of the
 traffic is reads (resolves), 25% writes (shortens), 5% metadata lookups.
-The SLO is **p99 ≤ 25 ms, errors < 1 %** — your **capacity** is the
-deepest stage where you held it.
+The scoreboard reports your **aggregated RPS** and **aggregated p99**
+across the whole run, plus the per-stage breakdown for diagnostics.
 
 The fastest submissions will:
 
@@ -85,7 +85,7 @@ Typical splits you'll see in real submissions:
 
 | Architecture | app | db | cache | When it wins |
 |--------------|----:|---:|------:|--------------|
-| Monolith + SQLite on a volume | 1.0 / 1024 | (in-process) | (in-process) | Tight SLO, small data |
+| Monolith + SQLite on a volume | 1.0 / 1024 | (in-process) | (in-process) | Low latency, small data |
 | App + Redis with persistence | 0.7 / 768 | (n/a) | 0.3 / 256 | Hot read path, no SQL needs |
 | App + DB | 0.6 / 640 | 0.4 / 384 | (in-process LRU) | Relational queries |
 | App + DB + cache | 0.55 / 512 | 0.35 / 416 | 0.10 / 96 | Heavy traffic, mostly reads |

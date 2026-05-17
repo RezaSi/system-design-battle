@@ -7,12 +7,12 @@
 A practical playground for system design. You ship a real service as a
 `docker-compose` stack, CI runs it under a fixed resource budget, hits
 it with [Locust](https://locust.io) through a staged load curve, and
-grades your submission on three things: how much of the spec it gets
-right, how high its sustained throughput at SLO is, and how deep into
-the load curve it holds up.
+posts three numbers back on the PR: **coverage**, **throughput**, and
+**p99 latency**. The leaderboard sorts submissions on those three
+axes — that's the entire scoring system.
 
-No diagrams on a whiteboard. No "imagine a load balancer". Real code, real
-containers, real numbers on a real PR.
+No diagrams on a whiteboard. No "imagine a load balancer". Real code,
+real containers, real numbers on a real PR.
 
 ## How it works
 
@@ -30,16 +30,18 @@ containers, real numbers on a real PR.
 What the grader reports back on every PR:
 
 - **Coverage** — percentage of functional tests that passed.
-- **Capacity** — the highest sustained RPS at which your stack still
-  met the challenge's SLO (p99 latency and error rate). This is the
-  headline number on the leaderboard.
-- **Grade** — a letter (S / A / B / C / D / F) summarising how far up
-  the load curve you held the SLO. See the Methodology section below.
+  Correctness is the gate; a submission that fails any functional test
+  ranks below one that passes them all, regardless of throughput.
+- **RPS** — aggregated requests/second across the whole staged load
+  test (warmup + light → saturation). Higher is better.
+- **p99** — 99th-percentile latency across the whole run, in
+  milliseconds. Lower is better. Used to break ties between submissions
+  with similar coverage and throughput.
 
 ## Methodology
 
-Each submission is graded under three constraints that together turn
-the bench from a microbench into a system-design exercise.
+Two constraints turn this from a microbench into a system-design
+exercise.
 
 ### 1. Stack-wide resource budget
 
@@ -71,26 +73,9 @@ preference.
 
 The Locust load test walks through five stages: a short warmup, then
 *light → target → heavy → saturation*. Stage sizes are challenge-specific.
-Each stage's per-second statistics are captured separately so the report
-can show the whole load curve, not just an aggregate number.
-
-### 3. SLO and capacity
-
-Each challenge declares an SLO — typically `p99 ≤ 25 ms, error rate
-< 1%`. The headline **Capacity** is the highest-RPS scored stage that
-held the SLO. If no scored stage held it, capacity is 0 and the grade
-drops to D (with 100% coverage) or F (with anything less).
-
-### Grade scale
-
-| Grade | Meaning |
-|------:|---------|
-| **S** | 100% coverage; held SLO at saturation (the hardest stage) |
-| **A** | 100% coverage; held SLO under heavy load |
-| **B** | 100% coverage; held SLO at target load |
-| **C** | 100% coverage; held SLO at light load only |
-| **D** | 100% coverage but never met SLO |
-| **F** | Correctness gate failed (coverage below 100%) |
+The per-stage breakdown is in the PR report so you can see the whole
+load curve, but the scoreboard ranks on the **aggregated** RPS and p99
+across the whole run — gaming a single stage doesn't help.
 
 ### Hardware caveat
 
@@ -102,12 +87,13 @@ the same CI runner on every merge.
 ## Top 10 (Challenge 1)
 
 Updated automatically when PRs are merged. See each challenge's
-`SCOREBOARD.md` for the full table.
+`SCOREBOARD.md` for the full table. Sorted by coverage (desc), then
+RPS (desc), then p99 (asc).
 
 <!-- BEGIN_MAIN_LEADERBOARD -->
-| Rank | Developer | Grade | Coverage | Capacity (req/s) | p99 (ms) |
-|:---:|:---|:---:|:---:|:---:|:---:|
-| 1 | [RezaSi](https://github.com/RezaSi) | **D** | 100.0% | 0.0 | 0 |
+| Rank | Developer | Coverage | RPS | p99 (ms) |
+|:---:|:---|:---:|---:|---:|
+| — | _no submissions yet_ | — | — | — |
 <!-- END_MAIN_LEADERBOARD -->
 
 ## The challenges
@@ -171,7 +157,7 @@ curl -X POST localhost:8080/shorten \
      -d '{"url":"https://example.com"}'
 ```
 
-### 4. Grade your submission with one command
+### 4. Benchmark your submission with one command
 
 From the repo root:
 
@@ -190,8 +176,8 @@ That single command:
 - Runs the functional tests (`pytest`) — that's your **coverage** number.
 - Drives the service through the staged load profile in
   `benchmark/config.yml` (~95 seconds total — warmup, light, target,
-  heavy, saturation), captures per-second stats, and computes your
-  **Capacity at SLO** and **Grade**.
+  heavy, saturation), captures per-second stats, and reports
+  **aggregated RPS** and **aggregated p99**.
 - Prints a `benchmark-report.md` summary identical to what CI will post
   on your PR.
 - Tears the stack down with `docker compose down -v`.
@@ -224,11 +210,11 @@ auto-merges and the scoreboard updates.
 system-design-battle/
 ├── .github/workflows/        pr-tests, auto-merge, update-scoreboards
 ├── challenge-1/              URL shortener
-│   ├── README.md             Problem statement + API contract + SLO
+│   ├── README.md             Problem statement + API contract
 │   ├── learning.md           Background reading
 │   ├── hints.md              Progressive nudges
 │   ├── benchmark/
-│   │   ├── config.yml        Resource budget, SLO, staged load profile
+│   │   ├── config.yml        Resource budget + staged load profile
 │   │   ├── tests.py          Functional tests (the executable spec)
 │   │   ├── locustfile.py     Staged load shape + task mix
 │   │   └── README.md
@@ -256,9 +242,9 @@ The grader is deliberately not language-aware. It only cares that
 `docker compose up` brings up a service that answers on port `8080` and
 that the service passes the functional tests. Use Go, Python, Rust, Node,
 Java, Elixir — whatever. The only thing the leaderboard compares is
-coverage, capacity at SLO, and grade.
+coverage, aggregated RPS, and aggregated p99.
 
-The benchmark parameters (resource budget, SLO, staged load profile,
+The benchmark parameters (resource budget, staged load profile,
 target host) live in each challenge's `benchmark/config.yml`. CI uses
 those exact values, so your local run and the PR result match.
 

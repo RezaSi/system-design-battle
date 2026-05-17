@@ -12,9 +12,9 @@
 # consistent (CI hardware drift is the same for all rows).
 #
 # Sort order:
-#   1. Grade (S > A > B > C > D > F)
-#   2. Capacity RPS at SLO (desc)
-#   3. p99 at capacity (asc)
+#   1. Coverage % (desc)  — correctness gate
+#   2. Aggregated RPS (desc)
+#   3. Aggregated p99 (asc)
 #
 set -euo pipefail
 
@@ -39,18 +39,19 @@ cat > "$SCOREBOARD" <<EOF
 > numbers are internally consistent.
 >
 > - **Coverage** — percentage of functional tests passed.
-> - **Capacity** — highest sustained RPS where the SLO held
->   (see \`benchmark/config.yml\` for the per-challenge SLO).
-> - **p99** — tail latency at the capacity stage.
-> - **Grade** — S held SLO at saturation, A at heavy, B at target,
->   C at light or below 100% coverage, D never met SLO, F coverage <95%.
+> - **RPS** — aggregated requests-per-second across the whole staged
+>   load test.
+> - **p99** — 99th percentile latency across the whole run.
+> - **Errors** — failure rate across the whole run.
+>
+> Submissions are ranked by **coverage (desc) → RPS (desc) → p99 (asc)**.
 
-| Rank | Username | Grade | Coverage | Capacity (req/s) | p99 (ms) | Errors |
-|:----:|:---------|:-----:|---------:|-----------------:|---------:|-------:|
+| Rank | Username | Coverage | RPS | p99 (ms) | Errors |
+|:----:|:---------|---------:|----:|---------:|-------:|
 EOF
 
 if [ ! -d "$CHALLENGE_DIR/submissions" ]; then
-    echo "| — | _no submissions yet_ | — | — | — | — | — |" >> "$SCOREBOARD"
+    echo "| — | _no submissions yet_ | — | — | — | — |" >> "$SCOREBOARD"
     echo "Wrote empty scoreboard to $SCOREBOARD"
     exit 0
 fi
@@ -91,18 +92,13 @@ username = sys.argv[3]
 cov = json.loads(cov_path.read_text()) if cov_path.exists() else {}
 bench = json.loads(bench_path.read_text()) if bench_path.exists() else {}
 
-grade = bench.get("grade", "F")
 coverage = float(cov.get("coverage_pct", 0.0))
-capacity = float(bench.get("capacity_rps", 0.0))
-p99 = int(bench.get("capacity_p99_ms", 0))
-err = float(bench.get("capacity_error_rate_pct", 0.0))
-
-# Numeric grade for sorting (higher is better).
-grade_rank = {"S": 5, "A": 4, "B": 3, "C": 2, "D": 1, "F": 0}.get(grade, 0)
+rps = float(bench.get("rps", 0.0))
+p99 = int(bench.get("p99_ms", 0))
+err = float(bench.get("failure_rate_pct", 0.0))
 
 print("\t".join([
-    username, grade, str(grade_rank),
-    f"{coverage:.1f}", f"{capacity:.1f}", str(p99), f"{err:.2f}"
+    username, f"{coverage:.1f}", f"{rps:.1f}", str(p99), f"{err:.2f}",
 ]))
 PY
 )
@@ -111,23 +107,20 @@ PY
 done
 
 if [ "$HAS_ANY" = "0" ]; then
-    echo "| — | _no submissions yet_ | — | — | — | — | — |" >> "$SCOREBOARD"
+    echo "| — | _no submissions yet_ | — | — | — | — |" >> "$SCOREBOARD"
     echo "Wrote empty scoreboard to $SCOREBOARD"
     exit 0
 fi
 
-# Sort: grade_rank desc (col 3), capacity desc (col 5), p99 asc (col 6).
-# Per-key flags are required here; -n and -g are mutually exclusive when
-# given as global flags, but each can be attached to its own key with
-# the `KEYnr` / `KEYg` shorthand. `-g` handles both ints and floats so
-# we use it everywhere.
-sort -t "$(printf '\t')" -k3,3gr -k5,5gr -k6,6g "$ROWS_FILE" > "$ROWS_FILE.sorted"
+# Sort: coverage desc (col 2), rps desc (col 3), p99 asc (col 4).
+# -g handles both ints and floats and is safe to use per-key.
+sort -t "$(printf '\t')" -k2,2gr -k3,3gr -k4,4g "$ROWS_FILE" > "$ROWS_FILE.sorted"
 
 RANK=0
-while IFS=$'\t' read -r u grade _grank cov cap p99 err; do
+while IFS=$'\t' read -r u cov rps p99 err; do
     RANK=$((RANK + 1))
-    printf "| %d | %s | %s | %s%% | %s | %s | %s%% |\n" \
-        "$RANK" "$u" "$grade" "$cov" "$cap" "$p99" "$err" >> "$SCOREBOARD"
+    printf "| %d | %s | %s%% | %s | %s | %s%% |\n" \
+        "$RANK" "$u" "$cov" "$rps" "$p99" "$err" >> "$SCOREBOARD"
 done < "$ROWS_FILE.sorted"
 
 echo

@@ -5,12 +5,14 @@
 > numbers are internally consistent.
 >
 > - **Coverage** — percentage of functional tests passed.
-> - **Capacity** — highest sustained RPS where the SLO held
->   (see `benchmark/config.yml` for the per-challenge SLO).
-> - **p99** — tail latency at the capacity stage.
-> - **Grade** — S held SLO at saturation, A at heavy, B at target,
->   C at light or below 100% coverage, D never met SLO, F coverage <95%.
+> - **RPS** — aggregated requests-per-second across the whole staged
+>   load test (429 responses count as success, not failures).
+> - **p99** — 99th percentile latency across the whole run.
+> - **Errors** — failure rate across the whole run (5xx / connection
+>   errors only).
+>
+> Submissions are ranked by **coverage (desc) → RPS (desc) → p99 (asc)**.
 
-| Rank | Username | Grade | Coverage | Capacity (req/s) | p99 (ms) | Errors |
-|:----:|:---------|:-----:|---------:|-----------------:|---------:|-------:|
-| 1 | RezaSi | D | 100.0% | 0.0 | 0 | 0.00% |
+| Rank | Username | Coverage | RPS | p99 (ms) | Errors |
+|:----:|:---------|---------:|----:|---------:|-------:|
+| — | _no submissions yet_ | — | — | — | — |

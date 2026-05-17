@@ -10,7 +10,7 @@ Three files matter:
   in a 9:1 ratio) plus a `StagedLoad` shape driven by `config.yml`.
   Each user picks a random API key from a 200-key pool. 429s are
   counted as success because they are the limiter doing its job.
-- `config.yml` — resource budget, SLO, staged load profile, health path.
+- `config.yml` — resource budget, staged load profile, health path.
 
 You should not modify any file in this folder when submitting a solution.
 The PR-tests workflow rejects edits here unless a maintainer applies the
@@ -24,7 +24,7 @@ The PR-tests workflow rejects edits here unless a maintainer applies the
 
 This runs `scripts/run_benchmark.sh` end-to-end. If you just want to
 loop on a single failing test, run pytest directly against an already-up
-stack — but you'll lose the capacity-at-SLO and grade numbers:
+stack — but you'll lose the RPS and p99 numbers:
 
 ```bash
 cd challenge-2/submissions/<you> && docker compose up -d --build

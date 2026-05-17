@@ -9,12 +9,20 @@ Used by scripts/run_benchmark.sh in three modes:
 2. --locust-csv + --locust-history + --config + --benchmark-out
        Parse the Locust aggregated CSV (per-endpoint summary) plus the
        per-second history CSV (per-stage breakdown), combine with the
-       challenge config (SLO + load_stages), and emit benchmark.json
-       with capacity_rps_at_slo, per_stage[], per_endpoint[], grade.
+       challenge config (load_stages, for the per-stage table only),
+       and emit benchmark.json with aggregated rps + p99_ms + errors
+       plus per_endpoint[] and per_stage[] for the PR report.
 
 3. --coverage + --benchmark + --challenge + --submission + --report-out
        Combine the two JSONs into the benchmark-report.md that the PR
        comment and the scoreboard use.
+
+The scoreboard ranks submissions on three axes:
+  1. coverage_pct  (descending)  — correctness gate
+  2. rps           (descending)  — throughput
+  3. p99_ms        (ascending)   — tail latency
+
+That's it. No SLO, no letter grade.
 """
 
 from __future__ import annotations
@@ -175,6 +183,10 @@ def parse_per_endpoint(csv_path: Path) -> tuple[dict, list[dict]]:
 def parse_per_stage(history_path: Path, stages: list[dict]) -> list[dict]:
     """Slice stats_history.csv by stage time-window and compute per-stage metrics.
 
+    Used by the PR report to show how the system degrades under load.
+    Not used by the scoreboard — the scoreboard reads only the
+    aggregated row.
+
     Strategy:
       - Filter rows where Name == "Aggregated".
       - Group by stage based on elapsed time since the first row.
@@ -183,8 +195,7 @@ def parse_per_stage(history_path: Path, stages: list[dict]) -> list[dict]:
       - rps  = mean(Requests/s)
       - p99  = mean(99%)  — averaged across the per-window snapshots so
                             a single noisy 2s window doesn't define the
-                            stage's tail. The max is reported in the JSON
-                            payload separately.
+                            stage's tail.
       - p90  = mean(90%)
       - p50  = mean(50%)
       - err% = sum(Failures/s) / sum(Requests/s) * 100
@@ -237,7 +248,6 @@ def parse_per_stage(history_path: Path, stages: list[dict]) -> list[dict]:
                     "p90_ms": 0,
                     "p99_ms": 0,
                     "error_rate_pct": 0.0,
-                    "met_slo": False,
                 }
             )
             continue
@@ -267,95 +277,17 @@ def parse_per_stage(history_path: Path, stages: list[dict]) -> list[dict]:
                 "p50_ms": _mean(p50_values),
                 "p90_ms": _mean(p90_values),
                 "p99_ms": _mean(p99_values),
-                # Worst per-window p99 — surfaced for debugging but not
-                # the SLO gate. The "Max p99" column tells reviewers if
-                # there was a nasty spike inside the stage.
+                # Worst per-window p99 — surfaced for debugging.
                 "p99_max_ms": max(p99_values) if p99_values else 0,
                 "error_rate_pct": round(err_pct, 2),
-                # met_slo is filled in by capacity calculation below.
-                "met_slo": False,
             }
         )
     return results
 
 
-def compute_capacity(per_stage: list[dict], slo: dict) -> dict:
-    """Pick the highest-RPS scored stage that meets the SLO.
-
-    Returns {
-        capacity_rps,                  # 0.0 if no scored stage met SLO
-        capacity_stage,                # name of the stage, or None
-        capacity_p99_ms,               # tail latency at that stage
-        capacity_error_rate_pct,
-        slo_p99_ms, slo_error_rate_pct,
-    }
-    """
-    slo_p99 = float(slo.get("p99_ms", 50))
-    slo_err = float(slo.get("error_rate_pct", 1.0))
-
-    best = None
-    for stage in per_stage:
-        if not stage.get("scored", True):
-            continue
-        meets = stage["p99_ms"] <= slo_p99 and stage["error_rate_pct"] < slo_err
-        stage["met_slo"] = meets
-        if meets and (best is None or stage["rps"] > best["rps"]):
-            best = stage
-
-    return {
-        "capacity_rps": round(best["rps"], 2) if best else 0.0,
-        "capacity_stage": best["name"] if best else None,
-        "capacity_p99_ms": best["p99_ms"] if best else 0,
-        "capacity_error_rate_pct": best["error_rate_pct"] if best else 0.0,
-        "slo_p99_ms": slo_p99,
-        "slo_error_rate_pct": slo_err,
-    }
-
-
-def compute_grade(coverage_pct: float, per_stage: list[dict]) -> str:
-    """Map coverage + how far up the load curve we held the SLO into S/A/B/C/D/F.
-
-    Correctness is a hard gate: anything below 100% coverage is F. Once
-    correctness is satisfied, the grade comes from how deep into the
-    load curve the SLO held.
-
-      S = held SLO at saturation (final stage)
-      A = held SLO at the heavy stage
-      B = held SLO at the target stage
-      C = held SLO only at the light stage
-      D = 100% coverage but never met SLO
-      F = coverage < 100% (correctness failed)
-    """
-    if coverage_pct < 100:
-        return "F"
-
-    scored = [s for s in per_stage if s.get("scored", True)]
-    last_pass_index = -1
-    for i, stage in enumerate(scored):
-        if stage.get("met_slo"):
-            last_pass_index = i
-
-    if not scored or last_pass_index == -1:
-        return "D"
-
-    total = len(scored)
-    distance_from_top = (total - 1) - last_pass_index
-    return {0: "S", 1: "A", 2: "B", 3: "C"}.get(distance_from_top, "D")
-
-
 # ---------------------------------------------------------------------------
 # Report rendering
 # ---------------------------------------------------------------------------
-
-
-GRADE_DESCRIPTIONS = {
-    "S": "Held SLO at saturation",
-    "A": "Held SLO under heavy load",
-    "B": "Held SLO at target load",
-    "C": "Held SLO at light load only",
-    "D": "100% coverage but never met SLO",
-    "F": "Correctness gate failed (coverage below 100%)",
-}
 
 
 def render_report(coverage: dict, benchmark: dict, challenge: str, submission: str) -> str:
@@ -371,32 +303,24 @@ def render_report(coverage: dict, benchmark: dict, challenge: str, submission: s
             more = f"\n- ...and {len(failed_tests) - 20} more"
         failed_block = f"\n\n**Failing tests**\n{items}{more}\n"
 
-    grade = benchmark.get("grade", "F")
-    grade_desc = GRADE_DESCRIPTIONS.get(grade, "")
+    rps = benchmark.get("rps", 0.0)
+    p50_ms = benchmark.get("p50_ms", 0)
+    p90_ms = benchmark.get("p90_ms", 0)
+    p99_ms = benchmark.get("p99_ms", 0)
+    err_pct = benchmark.get("failure_rate_pct", 0.0)
+    total_requests = benchmark.get("total_requests", 0)
+    failures = benchmark.get("failures", 0)
 
-    capacity_rps = benchmark.get("capacity_rps", 0.0)
-    capacity_stage = benchmark.get("capacity_stage") or "—"
-    capacity_p99 = benchmark.get("capacity_p99_ms", 0)
-    capacity_err = benchmark.get("capacity_error_rate_pct", 0.0)
-    slo_p99 = benchmark.get("slo_p99_ms", 0)
-    slo_err = benchmark.get("slo_error_rate_pct", 0.0)
-
-    # Per-stage table
+    # Per-stage table — kept as diagnostic information.
     stage_rows = []
     for stage in benchmark.get("per_stage", []):
         scored_marker = "" if stage.get("scored", True) else " _(warmup)_"
-        if not stage.get("scored", True):
-            slo_marker = "—"
-        elif stage.get("met_slo"):
-            slo_marker = "PASS"
-        else:
-            slo_marker = "FAIL"
         stage_rows.append(
             f"| {stage['name']}{scored_marker} | {stage['users']} | "
             f"{stage['rps']:.0f} | {stage['p50_ms']} | {stage['p90_ms']} | "
-            f"{stage['p99_ms']} | {stage['error_rate_pct']:.2f}% | {slo_marker} |"
+            f"{stage['p99_ms']} | {stage['error_rate_pct']:.2f}% |"
         )
-    stage_table = "\n".join(stage_rows) if stage_rows else "| — | — | — | — | — | — | — | — |"
+    stage_table = "\n".join(stage_rows) if stage_rows else "| — | — | — | — | — | — | — |"
 
     # Per-endpoint table
     endpoint_rows = []
@@ -410,24 +334,24 @@ def render_report(coverage: dict, benchmark: dict, challenge: str, submission: s
 
     return f"""## Benchmark report — {challenge_name}
 
-Submission: `{submission_user}`  |  Grade: **{grade}** — _{grade_desc}_
+Submission: `{submission_user}`
 
 ### Headline
 
 | Metric | Value |
 |--------|------:|
 | Coverage | **{coverage.get('coverage_pct', 0.0)}%** ({coverage.get('passed', 0)}/{coverage.get('total', 0)} tests) |
-| Capacity @ SLO | **{capacity_rps:.0f} req/s** (at stage `{capacity_stage}`) |
-| Tail latency at capacity | p99 = **{capacity_p99} ms** (SLO ≤ {slo_p99}) |
-| Error rate at capacity | {capacity_err:.2f}% (SLO < {slo_err}%) |
+| Throughput | **{rps:.0f} req/s** ({total_requests} requests over the whole run) |
+| Tail latency | p50 = **{p50_ms} ms**, p90 = **{p90_ms} ms**, p99 = **{p99_ms} ms** |
+| Errors | **{err_pct:.2f}%** ({failures} failed requests) |
 
 ### Load curve
 
-Each row is a stage from the staged load profile. A stage "passes" the
-SLO if its p99 ≤ {slo_p99} ms and its error rate < {slo_err}%.
+Each row is a stage from the staged load profile (diagnostic only —
+the scoreboard uses the aggregated row across the whole run).
 
-| Stage | Users | RPS | p50 (ms) | p90 (ms) | p99 (ms) | Errors | SLO |
-|-------|------:|----:|---------:|---------:|---------:|-------:|:---:|
+| Stage | Users | RPS | p50 (ms) | p90 (ms) | p99 (ms) | Errors |
+|-------|------:|----:|---------:|---------:|---------:|-------:|
 {stage_table}
 
 ### Per-endpoint summary (whole run)
@@ -469,25 +393,17 @@ def main() -> int:
         aggregated, per_endpoint = parse_per_endpoint(args.locust_csv)
 
         stages = []
-        slo = {"p99_ms": 50, "error_rate_pct": 1.0}
         if args.config and args.config.exists():
             cfg = yaml.safe_load(args.config.read_text()) or {}
             stages = cfg.get("load_stages") or []
-            slo = cfg.get("slo") or slo
 
         per_stage = parse_per_stage(args.locust_history, stages) if args.locust_history else []
-        capacity = compute_capacity(per_stage, slo)
 
         data = {
             **aggregated,
             "per_endpoint": per_endpoint,
             "per_stage": per_stage,
-            **capacity,
         }
-        # grade depends on coverage too, but we don't have coverage in
-        # this invocation; fill it in defensively as "—" and let the
-        # report-rendering pass override.
-        data["grade"] = "—"
         args.benchmark_out.write_text(json.dumps(data, indent=2))
         print(f"Wrote benchmark to {args.benchmark_out}")
         return 0
@@ -495,14 +411,6 @@ def main() -> int:
     if args.coverage and args.benchmark and args.report_out and args.challenge and args.submission:
         cov = json.loads(args.coverage.read_text()) if args.coverage.exists() else {}
         bench = json.loads(args.benchmark.read_text()) if args.benchmark.exists() else {}
-        # Compute grade now that we have both signals, and write it back
-        # into benchmark.json so the scoreboard can sort on it.
-        bench["grade"] = compute_grade(
-            cov.get("coverage_pct", 0.0),
-            bench.get("per_stage", []),
-        )
-        args.benchmark.write_text(json.dumps(bench, indent=2))
-
         report = render_report(cov, bench, args.challenge, args.submission)
         args.report_out.write_text(report)
         print(f"Wrote report to {args.report_out}")

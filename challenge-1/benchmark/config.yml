@@ -3,25 +3,20 @@ host: http://localhost:8080
 health_path: /healthz
 warmup_seconds: 3
 
-# Resource budget enforced on the submission stack. Total across all
-# services in the submission's docker-compose.yml. The grader divides
-# this equally per service (with a 0.25 CPU / 256 MB floor) and writes
-# a .sdb-grader-override.yml to enforce it.
+# Resource budget for the whole submission stack. Every service in the
+# submission's docker-compose.yml must declare `cpus:` and `mem_limit:`,
+# and the sum across services must not exceed this budget. The grader
+# enforces this with scripts/validate_budget.py before starting the
+# stack. How you split the budget across services is up to you — that's
+# part of the design.
 resource_budget:
   cpus: 1.0
   memory_mb: 1024
 
-# Service Level Objective the bench grades against. A "passing" load
-# stage must have p99 <= slo.p99_ms AND error_rate <= slo.error_rate_pct.
-# The "capacity" RPS on the scoreboard is the highest sustained RPS that
-# still met the SLO.
-slo:
-  p99_ms: 25
-  error_rate_pct: 1.0
-
-# Staged load profile. The bench runs a single Locust process driving a
-# LoadTestShape that walks these stages in order. The first stage is a
-# warmup and is not counted toward the SLO / capacity calculation.
+# Staged load profile. The bench runs Locust driving a LoadTestShape
+# that walks these stages in order. The first stage is a warmup; all
+# of them feed into the aggregated RPS and p99 numbers on the
+# scoreboard.
 load_stages:
   - { name: "warmup",     users: 20,  spawn_rate: 20,  duration_s: 15, scored: false }
   - { name: "light",      users: 50,  spawn_rate: 30,  duration_s: 20, scored: true  }

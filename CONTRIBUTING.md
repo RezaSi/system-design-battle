@@ -81,13 +81,13 @@ The grader will then run, in order:
 1. `scripts/validate_budget.py` — confirms the resource caps are
    declared and sum to within the budget.
 2. `pytest` against `challenge-<n>/benchmark/tests.py` — these are the
-   functional / coverage tests. Coverage = passed / total. Below 100%
-   fails the correctness gate.
+   functional / coverage tests. Coverage = passed / total.
 3. `locust --headless` with `challenge-<n>/benchmark/locustfile.py`
    driving a staged load profile (warmup → light → target → heavy →
-   saturation). Per-stage RPS, p99, and error rate are extracted from
-   `locust_stats_history.csv` to compute the **Capacity at SLO** number
-   and the grade.
+   saturation). Aggregated RPS, p99 latency, and error rate across the
+   whole run are recorded to `benchmark.json` and published to the
+   scoreboard. The per-stage breakdown is included in the PR report
+   for diagnostics.
 
 You **cannot** modify files under `challenge-<n>/benchmark/` from a
 submission PR. CI rejects that. If you think a test is wrong, open an
@@ -109,8 +109,8 @@ What happens under the hood:
 - Waits for `/healthz` to return 200 (up to 60s).
 - Runs `pytest` and parses the JUnit XML into `coverage.json`.
 - Runs `locust --headless` against a staged load shape and parses the
-  per-second history CSV into `benchmark.json` (per-stage metrics,
-  capacity at SLO, grade, per-endpoint breakdown).
+  per-second history CSV into `benchmark.json` (aggregated RPS / p99 /
+  errors plus the per-stage and per-endpoint breakdown).
 - Renders `benchmark-report.md` — identical to the PR comment.
 - Tears everything down with `docker compose down -v`.
 
@@ -151,11 +151,11 @@ written to discover challenges by this convention:
 
 ```
 challenge-<n>/
-├── README.md                  Problem statement, API contract, SLO, scoring
+├── README.md                  Problem statement, API contract, scoring
 ├── learning.md                Background reading on the relevant patterns
 ├── hints.md                   Progressive nudges, no spoilers
 ├── benchmark/
-│   ├── config.yml             Resource budget, SLO, staged load profile
+│   ├── config.yml             Resource budget + staged load profile
 │   ├── tests.py               pytest functional / coverage tests
 │   ├── locustfile.py          Locust tasks + StagedLoad shape
 │   └── README.md              Short note on what these files are
@@ -182,10 +182,6 @@ resource_budget:
   cpus: 1.0
   memory_mb: 1024
 
-slo:
-  p99_ms: 25
-  error_rate_pct: 1.0
-
 load_stages:
   - { name: "warmup",     users: 20,  spawn_rate: 20,  duration_s: 15, scored: false }
   - { name: "light",      users: 50,  spawn_rate: 30,  duration_s: 20, scored: true  }
@@ -194,9 +190,9 @@ load_stages:
   - { name: "saturation", users: 800, spawn_rate: 400, duration_s: 20, scored: true  }
 ```
 
-You can tune `resource_budget`, `slo`, and the stage sizes per
-challenge. The grader reads these directly — no other code change is
-needed when you add a new challenge.
+You can tune `resource_budget` and the stage sizes per challenge. The
+grader reads these directly — no other code change is needed when you
+add a new challenge.
 
 ### Step-by-step checklist for a new challenge
 
@@ -206,9 +202,9 @@ needed when you add a new challenge.
    error bodies, durability requirements, definition of done.
 3. Write `benchmark/tests.py` as the executable spec. Every assertion
    should be traceable back to a line in `README.md`.
-4. Adjust `benchmark/config.yml`: pick an SLO (`p99_ms`,
-   `error_rate_pct`) and a load profile (5 stages is the convention).
-   Keep `resource_budget` at `1.0 CPU / 1024 MB` unless you have a
+4. Adjust `benchmark/config.yml`: pick a load profile (5 stages is the
+   convention — warmup, light, target, heavy, saturation). Keep
+   `resource_budget` at `1.0 CPU / 1024 MB` unless you have a
    reason to differ.
 5. Write `benchmark/locustfile.py` with a task mix that exercises the
    interesting endpoints. Use the `StagedLoad` shape that reads

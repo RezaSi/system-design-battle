@@ -130,17 +130,14 @@ Return metadata for a code. This is the "stat lookup" endpoint.
 Three numbers, all reported on the PR comment and in `SCOREBOARD.md`:
 
 1. **Coverage** — percentage of the functional tests in
-   [`benchmark/tests.py`](benchmark/tests.py) that passed. Anything
-   below 100% fails the correctness gate (grade **F**).
-2. **Capacity** — the highest sustained RPS at which the stack still
-   met the SLO. The SLO for this challenge is **p99 ≤ 25 ms,
-   error rate < 1 %**, evaluated independently on each scored stage of
-   the staged load profile (see `benchmark/config.yml`).
-3. **Grade** — `S` if you held the SLO at the saturation stage (800
-   users), `A` at heavy, `B` at target, `C` at light only, `D` if you
-   never met SLO, `F` if coverage isn't 100%.
+   [`benchmark/tests.py`](benchmark/tests.py) that passed.
+2. **RPS** — aggregated requests-per-second across the whole staged
+   load test (warmup + light → saturation; see `benchmark/config.yml`).
+3. **p99 (ms)** — 99th-percentile latency across the whole run.
 
-The scoreboard sorts by grade, then capacity, then p99.
+The scoreboard sorts by **coverage (desc) → RPS (desc) → p99 (asc)**.
+Correctness wins ties first; throughput wins between correct
+submissions; tail latency is the final tiebreaker.
 
 ## Quick start
 

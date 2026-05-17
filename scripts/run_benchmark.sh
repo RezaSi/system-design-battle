@@ -80,8 +80,6 @@ HEALTH_PATH=$(read_config_value "health_path" "/healthz")
 WARMUP_SECONDS=$(read_config_value "warmup_seconds" "3")
 BUDGET_CPUS=$(read_config_value "resource_budget.cpus" "1.0")
 BUDGET_MEM=$(read_config_value "resource_budget.memory_mb" "1024")
-SLO_P99=$(read_config_value "slo.p99_ms" "50")
-SLO_ERR=$(read_config_value "slo.error_rate_pct" "1.0")
 
 # Total Locust run-time = sum of stage durations from config.
 TOTAL_DURATION_S=$(python3 - "$CONFIG_FILE" <<'PY'
@@ -100,7 +98,6 @@ echo "  Challenge:        $CHALLENGE_DIR"
 echo "  Submission:       $SUBMISSION_DIR"
 echo "  Host:             $HOST_URL"
 echo "  Resource budget:  ${BUDGET_CPUS} CPU / ${BUDGET_MEM} MB (stack total)"
-echo "  SLO:              p99 <= ${SLO_P99} ms, errors < ${SLO_ERR}%"
 echo "  Load duration:    ${TOTAL_DURATION_S}s (sum of staged profile)"
 echo "  Health path:      $HEALTH_PATH"
 echo

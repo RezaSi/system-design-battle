@@ -8,10 +8,11 @@ Three files matter:
   README.
 - `locustfile.py` — Locust task mix plus a `StagedLoad` shape that walks
   through the stages declared in `config.yml`. The shape reports
-  per-second statistics to `stats_history.csv`, which the grader slices
-  by stage to compute capacity-at-SLO.
-- `config.yml` — challenge-wide configuration: resource budget, SLO,
-  staged load profile, health path.
+  per-second statistics to `stats_history.csv`, which the grader rolls
+  up into the aggregated RPS and p99 numbers on the scoreboard plus a
+  per-stage breakdown in the PR report.
+- `config.yml` — challenge-wide configuration: resource budget, staged
+  load profile, health path.
 
 You should not modify any file in this folder when submitting a solution.
 The PR-tests workflow rejects edits here unless a maintainer applies the
@@ -39,5 +40,5 @@ TARGET_HOST=http://localhost:8080 python3 -m pytest \
 docker compose -f challenge-1/submissions/<you>/docker-compose.yml down -v
 ```
 
-That runs the functional tests but skips the load test. For the full
-capacity / grade picture, use `./grade.sh`.
+That runs the functional tests but skips the load test. For RPS /
+p99 numbers, use `./grade.sh`.

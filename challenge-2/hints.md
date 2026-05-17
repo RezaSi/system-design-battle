@@ -41,9 +41,11 @@ the value is `>= 0` on every successful response.
 
 The load test in `config.yml` walks five stages, peaking at 1500
 concurrent users at saturation, each holding a distinct API key from a
-shared pool of 200. The SLO is **p99 ≤ 25 ms, errors < 1 %** (429s count
-as success). The fastest implementations don't lock globally and have
-zero allocations on the hot path. In Python this means:
+shared pool of 200. The scoreboard reports your aggregated RPS and
+aggregated p99 across the whole run (429s count as success — they're
+the limiter doing its job, not a failure). The fastest implementations
+don't lock globally and have zero allocations on the hot path. In
+Python this means:
 
 - Use `time.monotonic_ns()` instead of `datetime.now()` — it's an order
   of magnitude faster.

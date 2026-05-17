@@ -109,15 +109,14 @@ Inspect the current state for an API key without consuming a request.
 Three numbers, all reported on the PR comment and in `SCOREBOARD.md`:
 
 1. **Coverage** — percentage of `benchmark/tests.py` that passed.
-   Below 100% fails the correctness gate (grade **F**).
-2. **Capacity** — highest sustained RPS that held the SLO. For this
-   challenge the SLO is **p99 ≤ 25 ms, error rate < 1 %**, with **429
-   responses counted as success** (they are the limiter doing its job
-   correctly; only 5xx / connection errors are real failures).
-3. **Grade** — S / A / B / C / D / F based on which scored stage was
-   the deepest one to hold the SLO. The load test uses many distinct
-   API keys at high concurrency, so a limiter behind a global lock
-   shows up in the p99 immediately.
+2. **RPS** — aggregated requests/second across the whole staged
+   load test. **429 responses count as success** (they are the limiter
+   doing its job; only 5xx / connection errors are real failures).
+3. **p99 (ms)** — aggregated 99th-percentile latency. The load test
+   uses many distinct API keys at high concurrency, so a limiter that
+   sits behind a global lock shows up in p99 immediately.
+
+The scoreboard sorts by **coverage (desc) → RPS (desc) → p99 (asc)**.
 
 ## Quick start
 

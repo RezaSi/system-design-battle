@@ -120,7 +120,7 @@ volumes:
 ```
 
 Simplest. Fine for the easy challenge. Restart-safe because the data
-lives on a named volume. Wins on the tight SLO because there is no
+lives on a named volume. Wins on tail latency because there is no
 inter-container hop on the read path — every redirect is one in-process
 SQLite lookup.
 
@@ -188,8 +188,8 @@ Reads hit Redis first (microsecond latency), fall back to MongoDB on a
 miss and fill the cache. Writes go straight to MongoDB and invalidate
 the cache. Hits counter is batched in Redis and flushed to MongoDB
 every second. This is roughly how real-world shorteners are built and
-is what the reference submission ships. Under a tight SLO it will pay a
-hop-latency tax compared to the single-service design — that's the
+is what the reference submission ships. It will pay a hop-latency tax
+on every request compared to the single-service design — that's the
 trade-off, and the leaderboard's job is to make it visible.
 
 ## Things people get wrong
