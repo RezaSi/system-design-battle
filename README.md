@@ -107,7 +107,7 @@ Updated automatically when PRs are merged. See each challenge's
 <!-- BEGIN_MAIN_LEADERBOARD -->
 | Rank | Developer | Grade | Coverage | Capacity (req/s) | p99 (ms) |
 |:---:|:---|:---:|:---:|:---:|:---:|
-| — | _no submissions yet_ | — | — | — | — |
+| 1 | [RezaSi](https://github.com/RezaSi) | **D** | 100.0% | 0.0 | 0 |
 <!-- END_MAIN_LEADERBOARD -->
 
 ## The challenges
