@@ -93,7 +93,7 @@ RPS (desc), then p99 (asc).
 <!-- BEGIN_MAIN_LEADERBOARD -->
 | Rank | Developer | Coverage | RPS | p99 (ms) |
 |:---:|:---|:---:|---:|---:|
-| 1 | [RezaSi](https://github.com/RezaSi) | 100.0% | 970.0 | 650 |
+| 1 | [RezaSi](https://github.com/RezaSi) | 100.0% | 1067.5 | 2300 |
 <!-- END_MAIN_LEADERBOARD -->
 
 ## The challenges
