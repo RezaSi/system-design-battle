@@ -228,17 +228,21 @@ def parse_per_stage(history_path: Path, stages: list[dict]) -> list[dict]:
     aggregated row.
 
     Strategy:
-      - Filter rows where Name == "Aggregated".
+      - Filter rows where Name == "Aggregated" and the row passes the
+        physical-bound sanity check.
       - Group by stage based on elapsed time since the first row.
       - Drop the first 5 seconds of each stage (ramp-up and connection
         warm-up are not representative of steady-state behavior).
-      - rps  = mean(Requests/s)
-      - p99  = mean(99%)  — averaged across the per-window snapshots so
-                            a single noisy 2s window doesn't define the
-                            stage's tail.
-      - p90  = mean(90%)
-      - p50  = mean(50%)
-      - err% = sum(Failures/s) / sum(Requests/s) * 100
+      - RPS and error rate are computed from the cumulative
+        `Total Request Count` / `Total Failure Count` columns
+        (delta across the window divided by elapsed seconds). The
+        per-tick `Requests/s` column is sparse on the master in
+        multi-process mode — workers report every few seconds, so
+        most ticks read 0 — and averaging it produces misleadingly
+        low numbers.
+      - p50 / p90 / p99 are averaged across the per-tick
+        percentile snapshots, which DO populate every tick even when
+        the master hasn't received a worker delta yet.
     """
     if not stages or not history_path.exists():
         return []
@@ -257,6 +261,28 @@ def parse_per_stage(history_path: Path, stages: list[dict]) -> list[dict]:
     # per-stage error rate (e.g. dividing a 1e8 "Failures/s" by a
     # legitimate 100 "Requests/s" yields a 1e8% error rate in the report).
     agg_rows = [r for r in agg_rows if _is_plausible_history_row(r)]
+    if not agg_rows:
+        return []
+
+    # Sort by timestamp so window slicing and cumulative-delta math are
+    # both well-defined regardless of CSV row order.
+    agg_rows.sort(key=lambda r: _num(r.get("Timestamp"), int, 0))
+
+    # Multi-process mode interleaves two row populations in the same CSV:
+    # per-worker "Aggregated" snapshots (small cumulative counts) and the
+    # master's true aggregated rows (much larger counts). Mixing them
+    # blows up the cumulative-delta RPS calculation. Filter to the
+    # master rows by keeping only rows whose Total Request Count is
+    # monotonically non-decreasing — worker snapshots break monotonicity
+    # because each worker counts its own slice.
+    monotonic: list[dict] = []
+    running_max = -1
+    for r in agg_rows:
+        cnt = _num(r.get("Total Request Count"), int, 0)
+        if cnt >= running_max:
+            monotonic.append(r)
+            running_max = cnt
+    agg_rows = monotonic
     if not agg_rows:
         return []
 
@@ -302,16 +328,25 @@ def parse_per_stage(history_path: Path, stages: list[dict]) -> list[dict]:
             )
             continue
 
-        rps_values = [_num(r.get("Requests/s"), float, 0.0) for r in in_window]
-        fail_values = [_num(r.get("Failures/s"), float, 0.0) for r in in_window]
+        # RPS and error rate from cumulative counters: delta across the
+        # window divided by elapsed seconds. This is immune to the
+        # master-side "Requests/s" sparsity in --csv-full-history mode.
+        first, last = in_window[0], in_window[-1]
+        first_ts = _num(first.get("Timestamp"), int, 0)
+        last_ts = _num(last.get("Timestamp"), int, 0)
+        elapsed = max(last_ts - first_ts, 1)
+        first_reqs = _num(first.get("Total Request Count"), int, 0)
+        last_reqs = _num(last.get("Total Request Count"), int, 0)
+        first_fails = _num(first.get("Total Failure Count"), int, 0)
+        last_fails = _num(last.get("Total Failure Count"), int, 0)
+        d_reqs = max(last_reqs - first_reqs, 0)
+        d_fails = max(last_fails - first_fails, 0)
+        rps = d_reqs / elapsed
+        err_pct = (d_fails / d_reqs * 100) if d_reqs > 0 else 0.0
+
         p50_values = [_num(r.get("50%"), int, 0) for r in in_window]
         p90_values = [_num(r.get("90%"), int, 0) for r in in_window]
         p99_values = [_num(r.get("99%"), int, 0) for r in in_window]
-
-        rps_avg = sum(rps_values) / len(rps_values)
-        rps_sum = sum(rps_values)
-        fail_sum = sum(fail_values)
-        err_pct = (fail_sum / rps_sum * 100) if rps_sum > 0 else 0.0
 
         def _mean(xs):
             return int(round(sum(xs) / len(xs))) if xs else 0
@@ -323,7 +358,7 @@ def parse_per_stage(history_path: Path, stages: list[dict]) -> list[dict]:
                 "duration_s": duration,
                 "scored": scored,
                 "samples": len(in_window),
-                "rps": round(rps_avg, 2),
+                "rps": round(rps, 2),
                 "p50_ms": _mean(p50_values),
                 "p90_ms": _mean(p90_values),
                 "p99_ms": _mean(p99_values),
