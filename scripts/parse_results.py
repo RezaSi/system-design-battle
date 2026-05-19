@@ -137,7 +137,10 @@ def parse_per_endpoint(csv_path: Path) -> tuple[dict, list[dict]]:
     per_endpoint: list[dict] = []
     aggregated = None
     for row in rows:
-        name = row.get("Name", "").strip()
+        # csv.DictReader returns None for cells in short / partially
+        # written rows. Locust's multi-process writer occasionally emits
+        # one of those during stage transitions; treat them as empty.
+        name = (row.get("Name") or "").strip()
         if name == "Aggregated":
             aggregated = row
             continue
@@ -206,7 +209,15 @@ def parse_per_stage(history_path: Path, stages: list[dict]) -> list[dict]:
     with history_path.open() as f:
         rows = list(csv.DictReader(f))
 
-    agg_rows = [r for r in rows if r.get("Name", "").strip() == "Aggregated"]
+    # `or ""` defends against partial-write rows where DictReader returns
+    # None for the value (Locust master-side writer occasionally emits one
+    # of those when workers are spawning/shutting down in multi-process
+    # mode).
+    agg_rows = [r for r in rows if (r.get("Name") or "").strip() == "Aggregated"]
+    # Filter out rows where the timestamp didn't parse — without this a
+    # single corrupt row would shift t0 to a near-zero value and bucket
+    # every legitimate row into the wrong stage window.
+    agg_rows = [r for r in agg_rows if _num(r.get("Timestamp"), int, 0) > 0]
     if not agg_rows:
         return []
 
