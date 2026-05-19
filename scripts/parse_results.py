@@ -112,6 +112,43 @@ def _num(value: Any, cast=float, default=0):
         return default
 
 
+# Reasonable physical bounds for cells in Locust's stats_history.csv.
+# Anything outside these ranges is almost certainly a row that got
+# corrupted by the multi-process writer (column shift, partial flush).
+_LATENCY_MAX_MS = 600_000  # 10 minutes — clearly bogus for our benches
+_THROUGHPUT_MAX = 1_000_000  # one million req/s on a single-CPU stack: bogus
+
+
+def _is_plausible_history_row(row: dict) -> bool:
+    """Return True only if the row's numeric cells are within physical bounds.
+
+    The expected shape is: Timestamp (epoch seconds), Requests/s,
+    Failures/s, and a handful of percentile columns in milliseconds.
+    Reject the row if any of those is None, negative, or off-the-charts.
+    """
+    ts = _num(row.get("Timestamp"), int, 0)
+    # Plausible Unix epoch second is between 2001-09-09 (10^9) and roughly
+    # the year 5000 (10^11). Anything else is from a column shift.
+    if ts < 10**9 or ts > 10**11:
+        return False
+    for col, ceiling in (
+        ("Requests/s", _THROUGHPUT_MAX),
+        ("Failures/s", _THROUGHPUT_MAX),
+        ("50%", _LATENCY_MAX_MS),
+        ("90%", _LATENCY_MAX_MS),
+        ("99%", _LATENCY_MAX_MS),
+    ):
+        v = row.get(col)
+        if v is None:
+            return False
+        if v == "N/A":
+            continue  # "no data this tick" is a legitimate state
+        num = _num(v, float, None)
+        if num is None or num < 0 or num > ceiling:
+            return False
+    return True
+
+
 def parse_per_endpoint(csv_path: Path) -> tuple[dict, list[dict]]:
     """Parse Locust's final _stats.csv into (aggregated, per_endpoint).
 
@@ -214,10 +251,12 @@ def parse_per_stage(history_path: Path, stages: list[dict]) -> list[dict]:
     # of those when workers are spawning/shutting down in multi-process
     # mode).
     agg_rows = [r for r in rows if (r.get("Name") or "").strip() == "Aggregated"]
-    # Filter out rows where the timestamp didn't parse — without this a
-    # single corrupt row would shift t0 to a near-zero value and bucket
-    # every legitimate row into the wrong stage window.
-    agg_rows = [r for r in agg_rows if _num(r.get("Timestamp"), int, 0) > 0]
+    # Reject rows that look corrupted: partial writes, column-shifted
+    # rows, or otherwise out-of-physical-bound cells. Without this filter
+    # a single bad row can poison `t0`, the per-stage mean, or the
+    # per-stage error rate (e.g. dividing a 1e8 "Failures/s" by a
+    # legitimate 100 "Requests/s" yields a 1e8% error rate in the report).
+    agg_rows = [r for r in agg_rows if _is_plausible_history_row(r)]
     if not agg_rows:
         return []
 
