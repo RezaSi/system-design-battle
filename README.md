@@ -95,13 +95,13 @@ each challenge's `SCOREBOARD.md` for the full table. Sorted by coverage
 
 | Rank | Developer | Coverage | RPS | p99 (ms) |
 |:---:|:---|:---:|---:|---:|
-| 1 | [RezaSi](https://github.com/RezaSi) | 100.0% | 982.0 | 2600 |
+| 1 | [RezaSi](https://github.com/RezaSi) | 100.0% | 2147.0 | 260 |
 
 ### Challenge 2 — Rate-Limited API
 
 | Rank | Developer | Coverage | RPS | p99 (ms) |
 |:---:|:---|:---:|---:|---:|
-| 1 | [RezaSi](https://github.com/RezaSi) | 100.0% | 2157.1 | 830 |
+| 1 | [RezaSi](https://github.com/RezaSi) | 100.0% | 2185.0 | 850 |
 <!-- END_MAIN_LEADERBOARD -->
 
 ## The challenges
