@@ -10,14 +10,13 @@ correctness against the API contract below, then load-test it.
 
 ## Definition of done
 
-The grader runs **20 functional tests** plus a 60-second Locust load test.
+The grader runs **18 functional tests** plus a 60-second Locust load test.
 A submission is "done" when:
 
 - [ ] `docker compose up` brings the service up and `GET /healthz` returns
       `200` within 60 seconds.
-- [ ] `POST /shorten` returns **`201`** for a new URL and **`200`** when
-      the same URL is shortened again.
-- [ ] The same URL always returns the same code (idempotency).
+- [ ] `POST /shorten` returns **`201 Created`** with
+      `{"code", "short_url"}` on success.
 - [ ] Codes match `^[A-Za-z0-9]{4,16}$` and are case-sensitive when resolved.
 - [ ] Invalid input (malformed JSON, missing `url`, empty `url`, non-http
       scheme) returns `400` with body `{"error": "..."}`.
@@ -57,8 +56,7 @@ Request:
 { "url": "https://example.com/some/long/path" }
 ```
 
-Response — `201 Created` for a newly minted code, `200 OK` if the URL has
-already been shortened and you're returning the existing code:
+Response — `201 Created` on success:
 
 ```json
 { "code": "abc123", "short_url": "http://localhost:8080/abc123" }
@@ -68,7 +66,9 @@ Rules:
 
 - `code` is alphanumeric, 4–16 characters long. `^[A-Za-z0-9]{4,16}$` is the
   exact regex the tests will check.
-- The same input URL must always map to the same code (idempotent).
+- Whether the same input URL maps to the same code on a repeat POST is
+  **up to you**. Deterministic-by-hash, random per-request, and
+  `INSERT … ON CONFLICT` are all valid designs.
 - Reject obviously invalid input with `400 Bad Request` and a JSON body
   `{"error": "..."}` if:
   - the body isn't valid JSON,
@@ -168,5 +168,5 @@ cd challenge-1
 ## Hints and learning
 
 - [`learning.md`](learning.md) — design notes: short-code generation,
-  collision handling, idempotency, hit counters.
+  collision handling, hit counters, durability shapes.
 - [`hints.md`](hints.md) — gentle nudges if you're stuck.

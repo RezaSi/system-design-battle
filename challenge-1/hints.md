@@ -21,27 +21,22 @@ You'll quickly notice **two** things you must build:
 You don't need anything fancy. Pick one of these, in order from easiest to
 hardest:
 
-- A SHA-256 of the URL, base62-encoded, take the first 7 characters.
-- A monotonic counter, base62-encoded.
 - 6 random base62 characters from a CSPRNG.
+- A monotonic counter, base62-encoded.
+- A SHA-256 of the URL, base62-encoded, take the first 7 characters.
 
-The first one is what the reference submission uses because it gives
-idempotency for free.
+The spec does not require the same URL to map to the same code on a
+repeat POST. Pick whichever option you like; each makes different
+trade-offs on storage size, code length, and write contention.
 
-## 3. Idempotency
-
-If the same URL comes in twice, the second response must include the same
-code. With a hash-based code that's automatic. With a random code, store
-`url -> code` in a map and look it up before generating a new one.
-
-## 4. The hit counter
+## 3. The hit counter
 
 Don't make `GET /:code` write to the database synchronously. The load test
 will hammer that endpoint and the write contention will tank your RPS.
 Instead, increment in memory (or in Redis) and let it drift; the tests
 allow a 1-second slack window.
 
-## 5. Health check
+## 4. Health check
 
 `GET /healthz` must return 200 within 60 seconds of `docker compose up`.
 If you depend on Postgres or Redis, either:
@@ -51,7 +46,7 @@ If you depend on Postgres or Redis, either:
 - Have your app return 503 from `/healthz` until the database connection
   is ready. The grader only cares about the *first* 200 it sees.
 
-## 6. Performance
+## 5. Performance
 
 The load test in `benchmark/config.yml` walks five stages: a 20-user
 warmup, then 50, 150, 400, and 800 concurrent users. Roughly 70% of the
@@ -75,7 +70,7 @@ The fastest submissions will:
   same budget will starve each other.
 - Batch the hits counter rather than incrementing on every read.
 
-## 7. Resource budget — choose carefully
+## 6. Resource budget — choose carefully
 
 Every service you add must declare `cpus:` and `mem_limit:`, and the sum
 across services must fit in **1.0 vCPU / 1024 MB**. The grader rejects
@@ -86,13 +81,13 @@ Typical splits you'll see in real submissions:
 | Architecture | app | db | cache | When it wins |
 |--------------|----:|---:|------:|--------------|
 | Monolith + SQLite on a volume | 1.0 / 1024 | (in-process) | (in-process) | Low latency, small data |
-| App + Redis with persistence | 0.7 / 768 | (n/a) | 0.3 / 256 | Hot read path, no SQL needs |
+| App + durable Redis | 0.7 / 256 | (n/a) | 0.3 / 768 | Pure key/value, in-memory hot, AOF for durability |
 | App + DB | 0.6 / 640 | 0.4 / 384 | (in-process LRU) | Relational queries |
 | App + DB + cache | 0.55 / 512 | 0.35 / 416 | 0.10 / 96 | Heavy traffic, mostly reads |
 
-The reference submission in `submissions/RezaSi/` uses the last split.
+The reference submission in `submissions/RezaSi/` uses the second split.
 
-## 8. If something feels wrong
+## 7. If something feels wrong
 
 The grader runs your stack in a fresh container, so any "works on my
 machine" issue usually comes from:

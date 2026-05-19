@@ -23,11 +23,11 @@ Three classic approaches, each with trade-offs.
 code = base62(sha256(url))[:7]
 ```
 
-- Pro: deterministic — the same URL always produces the same code, which
-  makes idempotency free.
-- Con: collisions. With 62^7 ≈ 3.5 trillion codes and a few billion URLs,
-  the birthday paradox kicks in long before you exhaust the space. You
-  need a "check, and if collision, try a longer prefix or salt" loop.
+- Pro: deterministic — the same URL always produces the same code, so
+  the same URL is naturally stored exactly once.
+- Con: collisions. With 62^7 ≈ 3.5 trillion codes the birthday paradox
+  eventually catches up with you. You need a "check, and if collision,
+  try a longer prefix or salt" loop.
 
 ### 2. Random codes
 
@@ -35,10 +35,11 @@ code = base62(sha256(url))[:7]
 code = base62(random_64_bits())[:7]
 ```
 
-- Pro: simple, no read before write.
-- Con: not idempotent — same URL gets different codes on different POSTs.
-  You can fix that with a unique index on `url` and an "on conflict
-  return existing row" pattern.
+- Pro: simple, no read before write, no global coordination.
+- Trade-off: the same URL ends up under multiple codes if it's shortened
+  more than once. That's fine for this challenge — the spec does **not**
+  require same-URL-same-code — but you'll waste storage if you don't
+  care to deduplicate.
 
 ### 3. Counter + base62
 
@@ -51,25 +52,10 @@ code = base62(next_id)
   does Redis `INCR`. Distributing the counter (Twitter's Snowflake,
   ticket servers) is harder than it looks.
 
-For this challenge, any of the three is fine. The functional tests verify
-that the code matches `^[A-Za-z0-9]{4,16}$` and that the same URL produces
-the same code on a repeat POST. The load test rewards a fast READ path more
-than anything else.
-
-## Idempotency
-
-> "POST /shorten with the same URL twice must return the same code."
-
-This is the most common bug. Two ways to handle it:
-
-- **Read before write.** On every POST, look up the URL first; if it
-  exists, return its code with a `200`. Otherwise create one. Two writers
-  for the same URL can still race, so wrap the create in a unique index
-  on `url` and handle the "already exists" error by reading again.
-
-- **Hash and write.** If your code is `hash(url)`, two writers will write
-  the same row twice. Most databases will let you do `INSERT ... ON
-  CONFLICT DO NOTHING` and you can ignore the duplicate.
+For this challenge any of the three is fine. The functional tests check
+that the code matches `^[A-Za-z0-9]{4,16}$` and that two distinct URLs
+get two distinct codes — that's it. The load test rewards a fast READ
+path more than anything else.
 
 ## The READ path is everything
 
@@ -152,7 +138,7 @@ make sure your app returns `503` from `/healthz` while it waits for the
 DB and `200` once it's reachable. The grader polls `/healthz` for up to
 60 seconds and only cares about the first `200` it sees.
 
-### App + cache + database (the reference)
+### App + cache + database
 
 ```yaml
 services:
@@ -187,23 +173,57 @@ volumes:
 Reads hit Redis first (microsecond latency), fall back to MongoDB on a
 miss and fill the cache. Writes go straight to MongoDB and invalidate
 the cache. Hits counter is batched in Redis and flushed to MongoDB
-every second. This is roughly how real-world shorteners are built and
-is what the reference submission ships. It will pay a hop-latency tax
-on every request compared to the single-service design — that's the
-trade-off, and the leaderboard's job is to make it visible.
+every second. This is roughly how real-world shorteners are built. It
+will pay a hop-latency tax on every request compared to the
+single-service design — that's the trade-off, and the leaderboard's
+job is to make it visible.
+
+### App + durable Redis (the current reference)
+
+```yaml
+services:
+  app:
+    build: .
+    cpus: 0.7
+    mem_limit: 256m
+    ports: ["8080:8080"]
+    depends_on:
+      - cache
+    environment:
+      REDIS_ADDR: cache:6379
+  cache:
+    image: redis:7-alpine
+    cpus: 0.3
+    mem_limit: 768m
+    command:
+      - "redis-server"
+      - "--appendonly"
+      - "yes"
+      - "--appendfsync"
+      - "everysec"
+    volumes:
+      - redisdata:/data
+volumes:
+  redisdata:
+```
+
+Treat Redis as the source of truth. AOF (`appendonly yes`,
+`appendfsync everysec`) means writes survive `docker compose restart`
+with at most ~1 second of data loss — safer than RDB snapshots and
+nowhere near as expensive as `appendfsync always`. The named volume
+on `/data` is what carries the AOF file across restarts. Codes,
+URL mappings, and the hit counter all live in Redis; no second store.
 
 ## Things people get wrong
 
 - Generating codes longer than 16 characters (the regex rejects them).
-- Returning `200` on first create instead of `201`, or vice-versa. Both are
-  accepted; the tests don't distinguish — but pick one consistently.
+- Returning something other than `201` on a successful create. The tests
+  expect `201` on success.
 - Forgetting that `/healthz` must answer **before** any data is loaded. The
   grader's wait loop only runs for 60 seconds.
-- Using a fresh code per POST. The idempotency test will fail.
 
 ## Further reading
 
 - ["URL Shortener System Design"](https://systeminterview.com/) (any
   reputable source covers this).
 - High Scalability: the [Bit.ly architecture](http://highscalability.com/blog/2014/7/14/bitly-lessons-learned-building-a-distributed-system-that-han.html).
-- [Stripe's idempotency keys post](https://stripe.com/blog/idempotency).

@@ -84,28 +84,10 @@ def test_shorten_short_url_is_absolute_and_ends_in_code():
     assert short_url.endswith(body["code"]), short_url
 
 
-def test_shorten_first_creation_returns_201():
-    """Spec: 201 Created when a new code is minted."""
+def test_shorten_returns_201_on_success():
+    """Spec: POST /shorten returns 201 Created on success."""
     resp = _post_shorten(_unique_url())
     assert resp.status_code == 201, resp.text
-
-
-def test_shorten_repeat_for_same_url_returns_200():
-    """Spec: 200 OK when returning an existing code for the same URL."""
-    url = _unique_url()
-    first = _post_shorten(url)
-    assert first.status_code == 201, first.text
-    second = _post_shorten(url)
-    assert second.status_code == 200, second.text
-
-
-def test_shorten_is_idempotent_for_same_url():
-    url = _unique_url()
-    a = _post_shorten(url).json()
-    b = _post_shorten(url).json()
-    assert a["code"] == b["code"], (
-        f"same URL must yield same code; got {a['code']} and {b['code']}"
-    )
 
 
 def test_shorten_different_urls_get_different_codes():
