@@ -1,14 +1,16 @@
-FROM python:3.12-slim
+FROM golang:1.24-alpine AS builder
 
-WORKDIR /app
+WORKDIR /src
 
-# Install dependencies first so layer caching works on iterations.
-COPY requirements.txt ./
-RUN pip install --no-cache-dir -r requirements.txt
+COPY go.mod go.sum ./
+RUN go mod download
 
-COPY app ./app
+COPY main.go ./
+RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -trimpath -o /out/shortener .
 
+FROM alpine:3.20
+RUN apk add --no-cache ca-certificates && adduser -D -u 10001 app
+USER app
+COPY --from=builder /out/shortener /usr/local/bin/shortener
 EXPOSE 8080
-
-# uvicorn binds to 0.0.0.0 so the container's port is reachable from the host.
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8080", "--log-level", "warning"]
+ENTRYPOINT ["/usr/local/bin/shortener"]

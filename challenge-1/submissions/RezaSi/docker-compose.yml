@@ -1,61 +1,49 @@
 services:
   # Resource budget for the whole stack: 1.0 CPU / 1024 MB.
-  # The grader sums these declarations and rejects the submission if the
-  # total exceeds the budget. The split below is opinionated:
-  #   - app gets the most CPU because shortener traffic is request-bound
-  #     and Python async needs cycles per concurrent connection.
-  #   - mongo needs enough memory for the WiredTiger cache floor (256 MB)
-  #     plus working set; CPU is moderate (write-bound under POSTs).
-  #   - cache is small — Redis is a hot lookup table, not a database.
+  # Two-container layout: a Go service, and Redis as the single source of
+  # truth. No separate database — Redis with AOF (`appendonly yes`,
+  # `appendfsync everysec`) on a named volume is durable enough to carry
+  # URL mappings across `docker compose restart` with at most one second
+  # of write loss.
+  #
+  # The split below leans memory on Redis (the only stateful service)
+  # and CPU on the app, which is the request-handling hotspot.
   app:
     build: .
-    cpus: 0.55
-    mem_limit: 512m
+    cpus: 0.7
+    mem_limit: 256m
     ports:
       - "8080:8080"
     environment:
-      MONGO_URL: mongodb://mongo:27017
-      REDIS_URL: redis://cache:6379
-      PYTHONUNBUFFERED: "1"
+      REDIS_ADDR: cache:6379
+      PUBLIC_HOST: http://localhost:8080
     depends_on:
-      - mongo
       - cache
-    restart: unless-stopped
-
-  mongo:
-    image: mongo:7
-    cpus: 0.35
-    mem_limit: 416m
-    # Pin WiredTiger cache to its 256 MB minimum so we don't blow the
-    # container's 416 MB cap. Logs muted to avoid disk I/O contention.
-    command:
-      - "mongod"
-      - "--quiet"
-      - "--logpath"
-      - "/dev/null"
-      - "--wiredTigerCacheSizeGB"
-      - "0.25"
-    volumes:
-      - mongodata:/data/db
     restart: unless-stopped
 
   cache:
     image: redis:7-alpine
-    cpus: 0.10
-    mem_limit: 96m
-    # No AOF, no RDB snapshots — Redis here is a cache and an ephemeral
-    # hit counter, not a source of truth. 64 MB max keys, LRU eviction.
+    cpus: 0.3
+    mem_limit: 768m
+    # AOF for durability, fsync once per second is a good throughput/loss
+    # trade-off (worst-case ~1s of writes lost across a hard restart).
+    # `maxmemory` is set well below `mem_limit` to leave headroom for the
+    # AOF rewrite buffer and Redis's own metadata.
     command:
       - "redis-server"
+      - "--appendonly"
+      - "yes"
+      - "--appendfsync"
+      - "everysec"
       - "--save"
       - ""
-      - "--appendonly"
-      - "no"
       - "--maxmemory"
-      - "64mb"
+      - "512mb"
       - "--maxmemory-policy"
-      - "allkeys-lru"
+      - "noeviction"
+    volumes:
+      - redisdata:/data
     restart: unless-stopped
 
 volumes:
-  mongodata:
+  redisdata:
