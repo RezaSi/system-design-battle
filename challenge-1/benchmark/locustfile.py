@@ -10,8 +10,9 @@ something to hit. Then they hit endpoints in the ratios above.
 
 The active load profile is driven by a LoadTestShape that reads
 benchmark/config.yml at import time and ramps through the declared
-stages. The grader parses stats_history.csv to extract per-stage metrics
-and compute the capacity-at-SLO headline number.
+stages. The grader reads only Locust's aggregated stats (final
+locust_stats.csv) — the headline RPS, p50/p90/p99, and error rate
+that the scoreboard ranks on.
 """
 
 from __future__ import annotations

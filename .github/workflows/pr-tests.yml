@@ -224,10 +224,17 @@ jobs:
       - name: Post or update PR comment
         if: always()
         uses: actions/github-script@v7
+        env:
+          # Pass dynamic content via env vars instead of `${{ }}`
+          # substitution. The body is markdown that contains backticks
+          # (e.g. `code blocks`); inlining it into a JS template literal
+          # would terminate the literal and break the script.
+          SDB_MARKER: "<!-- sdb-benchmark:${{ steps.paths.outputs.challenge }}/${{ steps.paths.outputs.username }} -->"
+          SDB_BODY: ${{ steps.comment.outputs.body }}
         with:
           script: |
-            const marker = `<!-- sdb-benchmark:${{ steps.paths.outputs.challenge }}/${{ steps.paths.outputs.username }} -->`;
-            const body = `${{ steps.comment.outputs.body }}`;
+            const marker = process.env.SDB_MARKER;
+            const body = process.env.SDB_BODY;
             const { data: existing } = await github.rest.issues.listComments({
               owner: context.repo.owner,
               repo: context.repo.repo,

@@ -12,7 +12,7 @@ Traffic mix:
 A StagedLoad shape walks through the stages declared in
 benchmark/config.yml. 429s are counted as success because they are the
 limiter doing its job correctly; only 5xx / connection errors are
-"failures" for SLO purposes.
+"failures" in the aggregated stats the scoreboard reads.
 """
 
 from __future__ import annotations

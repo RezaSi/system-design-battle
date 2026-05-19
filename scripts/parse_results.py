@@ -6,12 +6,10 @@ Used by scripts/run_benchmark.sh in three modes:
 1. --pytest-junit + --coverage-out
        Parse the JUnit XML produced by pytest into coverage.json.
 
-2. --locust-csv + --locust-history + --config + --benchmark-out
-       Parse the Locust aggregated CSV (per-endpoint summary) plus the
-       per-second history CSV (per-stage breakdown), combine with the
-       challenge config (load_stages, for the per-stage table only),
-       and emit benchmark.json with aggregated rps + p99_ms + errors
-       plus per_endpoint[] and per_stage[] for the PR report.
+2. --locust-csv + --benchmark-out
+       Parse the Locust aggregated CSV (per-endpoint summary plus the
+       Aggregated final row) and emit benchmark.json with aggregated
+       rps + p50/p90/p99 + errors plus per_endpoint[] for the PR report.
 
 3. --coverage + --benchmark + --challenge + --submission + --report-out
        Combine the two JSONs into the benchmark-report.md that the PR
@@ -22,7 +20,7 @@ The scoreboard ranks submissions on three axes:
   2. rps           (descending)  — throughput
   3. p99_ms        (ascending)   — tail latency
 
-That's it. No SLO, no letter grade.
+That's it. No SLO, no letter grade, no per-stage breakdown.
 """
 
 from __future__ import annotations
@@ -35,8 +33,6 @@ import sys
 import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import Any
-
-import yaml
 
 
 # ---------------------------------------------------------------------------
@@ -137,7 +133,10 @@ def parse_per_endpoint(csv_path: Path) -> tuple[dict, list[dict]]:
     per_endpoint: list[dict] = []
     aggregated = None
     for row in rows:
-        name = row.get("Name", "").strip()
+        # csv.DictReader returns None for cells in short / partially
+        # written rows. Locust's multi-process writer occasionally emits
+        # one of those during stage transitions; treat them as empty.
+        name = (row.get("Name") or "").strip()
         if name == "Aggregated":
             aggregated = row
             continue
@@ -180,111 +179,6 @@ def parse_per_endpoint(csv_path: Path) -> tuple[dict, list[dict]]:
     return summary, per_endpoint
 
 
-def parse_per_stage(history_path: Path, stages: list[dict]) -> list[dict]:
-    """Slice stats_history.csv by stage time-window and compute per-stage metrics.
-
-    Used by the PR report to show how the system degrades under load.
-    Not used by the scoreboard — the scoreboard reads only the
-    aggregated row.
-
-    Strategy:
-      - Filter rows where Name == "Aggregated".
-      - Group by stage based on elapsed time since the first row.
-      - Drop the first 5 seconds of each stage (ramp-up and connection
-        warm-up are not representative of steady-state behavior).
-      - rps  = mean(Requests/s)
-      - p99  = mean(99%)  — averaged across the per-window snapshots so
-                            a single noisy 2s window doesn't define the
-                            stage's tail.
-      - p90  = mean(90%)
-      - p50  = mean(50%)
-      - err% = sum(Failures/s) / sum(Requests/s) * 100
-    """
-    if not stages or not history_path.exists():
-        return []
-
-    with history_path.open() as f:
-        rows = list(csv.DictReader(f))
-
-    agg_rows = [r for r in rows if r.get("Name", "").strip() == "Aggregated"]
-    if not agg_rows:
-        return []
-
-    timestamps = [int(_num(r.get("Timestamp"), int, 0)) for r in agg_rows]
-    t0 = min(timestamps)
-
-    cumulative = 0
-    results: list[dict] = []
-    for stage in stages:
-        name = stage.get("name", "stage")
-        duration = int(stage.get("duration_s", 0))
-        users = int(stage.get("users", 0))
-        scored = bool(stage.get("scored", True))
-        start = cumulative
-        end = cumulative + duration
-        cumulative = end
-
-        # Window includes [start + 5, end). The 5s skip lets the user
-        # count stabilise after the previous stage's spawn-rate ramp and
-        # gives connection pools / JIT a chance to warm up.
-        window_start = t0 + start + 5
-        window_end = t0 + end
-
-        in_window = [
-            r for r, ts in zip(agg_rows, timestamps)
-            if window_start <= ts < window_end
-        ]
-
-        if not in_window:
-            results.append(
-                {
-                    "name": name,
-                    "users": users,
-                    "duration_s": duration,
-                    "scored": scored,
-                    "samples": 0,
-                    "rps": 0.0,
-                    "p50_ms": 0,
-                    "p90_ms": 0,
-                    "p99_ms": 0,
-                    "error_rate_pct": 0.0,
-                }
-            )
-            continue
-
-        rps_values = [_num(r.get("Requests/s"), float, 0.0) for r in in_window]
-        fail_values = [_num(r.get("Failures/s"), float, 0.0) for r in in_window]
-        p50_values = [_num(r.get("50%"), int, 0) for r in in_window]
-        p90_values = [_num(r.get("90%"), int, 0) for r in in_window]
-        p99_values = [_num(r.get("99%"), int, 0) for r in in_window]
-
-        rps_avg = sum(rps_values) / len(rps_values)
-        rps_sum = sum(rps_values)
-        fail_sum = sum(fail_values)
-        err_pct = (fail_sum / rps_sum * 100) if rps_sum > 0 else 0.0
-
-        def _mean(xs):
-            return int(round(sum(xs) / len(xs))) if xs else 0
-
-        results.append(
-            {
-                "name": name,
-                "users": users,
-                "duration_s": duration,
-                "scored": scored,
-                "samples": len(in_window),
-                "rps": round(rps_avg, 2),
-                "p50_ms": _mean(p50_values),
-                "p90_ms": _mean(p90_values),
-                "p99_ms": _mean(p99_values),
-                # Worst per-window p99 — surfaced for debugging.
-                "p99_max_ms": max(p99_values) if p99_values else 0,
-                "error_rate_pct": round(err_pct, 2),
-            }
-        )
-    return results
-
-
 # ---------------------------------------------------------------------------
 # Report rendering
 # ---------------------------------------------------------------------------
@@ -311,18 +205,6 @@ def render_report(coverage: dict, benchmark: dict, challenge: str, submission: s
     total_requests = benchmark.get("total_requests", 0)
     failures = benchmark.get("failures", 0)
 
-    # Per-stage table — kept as diagnostic information.
-    stage_rows = []
-    for stage in benchmark.get("per_stage", []):
-        scored_marker = "" if stage.get("scored", True) else " _(warmup)_"
-        stage_rows.append(
-            f"| {stage['name']}{scored_marker} | {stage['users']} | "
-            f"{stage['rps']:.0f} | {stage['p50_ms']} | {stage['p90_ms']} | "
-            f"{stage['p99_ms']} | {stage['error_rate_pct']:.2f}% |"
-        )
-    stage_table = "\n".join(stage_rows) if stage_rows else "| — | — | — | — | — | — | — |"
-
-    # Per-endpoint table
     endpoint_rows = []
     for ep in benchmark.get("per_endpoint", []):
         endpoint_rows.append(
@@ -345,15 +227,6 @@ Submission: `{submission_user}`
 | Tail latency | p50 = **{p50_ms} ms**, p90 = **{p90_ms} ms**, p99 = **{p99_ms} ms** |
 | Errors | **{err_pct:.2f}%** ({failures} failed requests) |
 
-### Load curve
-
-Each row is a stage from the staged load profile (diagnostic only —
-the scoreboard uses the aggregated row across the whole run).
-
-| Stage | Users | RPS | p50 (ms) | p90 (ms) | p99 (ms) | Errors |
-|-------|------:|----:|---------:|---------:|---------:|-------:|
-{stage_table}
-
 ### Per-endpoint summary (whole run)
 
 | Endpoint | Requests | Failures | RPS | p50 (ms) | p90 (ms) | p99 (ms) |
@@ -373,8 +246,6 @@ def main() -> int:
     p.add_argument("--pytest-junit", type=Path)
     p.add_argument("--coverage-out", type=Path)
     p.add_argument("--locust-csv", type=Path)
-    p.add_argument("--locust-history", type=Path)
-    p.add_argument("--config", type=Path)
     p.add_argument("--benchmark-out", type=Path)
     p.add_argument("--coverage", type=Path)
     p.add_argument("--benchmark", type=Path)
@@ -391,18 +262,9 @@ def main() -> int:
 
     if args.locust_csv and args.benchmark_out:
         aggregated, per_endpoint = parse_per_endpoint(args.locust_csv)
-
-        stages = []
-        if args.config and args.config.exists():
-            cfg = yaml.safe_load(args.config.read_text()) or {}
-            stages = cfg.get("load_stages") or []
-
-        per_stage = parse_per_stage(args.locust_history, stages) if args.locust_history else []
-
         data = {
             **aggregated,
             "per_endpoint": per_endpoint,
-            "per_stage": per_stage,
         }
         args.benchmark_out.write_text(json.dumps(data, indent=2))
         print(f"Wrote benchmark to {args.benchmark_out}")

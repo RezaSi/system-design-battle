@@ -17,8 +17,9 @@
 #   3. Wait for the service's /healthz to return 200.
 #   4. Run pytest against challenge/benchmark/tests.py for coverage.
 #   5. Run Locust headless with the LoadTestShape declared in the
-#      challenge's locustfile. Locust writes per-second stats to
-#      <out>/locust_stats_history.csv which the parser groups by stage.
+#      challenge's locustfile. Locust writes its aggregated CSV
+#      (<out>/locust_stats.csv) which the parser reads to produce the
+#      headline RPS, p50/p90/p99, error rate, and per-endpoint table.
 #   6. parse_results.py produces coverage.json, benchmark.json, and
 #      benchmark-report.md (the PR comment / scoreboard payload).
 #   7. docker compose down -v.
@@ -203,7 +204,6 @@ if [ "${SKIP_LOAD:-0}" != "1" ]; then
         --users 10 --spawn-rate 10 \
         --run-time "${TOTAL_DURATION_S}s" \
         --csv "$LOCUST_CSV_PREFIX" \
-        --csv-full-history \
         --only-summary \
         --exit-code-on-error 0
     LOCUST_EXIT=$?
@@ -213,8 +213,6 @@ echo "Locust exit code: $LOCUST_EXIT"
 
 python3 "$SCRIPTS_DIR/parse_results.py" \
     --locust-csv "${LOCUST_CSV_PREFIX}_stats.csv" \
-    --locust-history "${LOCUST_CSV_PREFIX}_stats_history.csv" \
-    --config "$CONFIG_FILE" \
     --benchmark-out "$OUTPUT_DIR/benchmark.json"
 
 echo "=== Generating report ==="
