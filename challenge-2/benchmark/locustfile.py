@@ -12,7 +12,7 @@ Traffic mix:
 A StagedLoad shape walks through the stages declared in
 benchmark/config.yml. 429s are counted as success because they are the
 limiter doing its job correctly; only 5xx / connection errors are
-"failures" for SLO purposes.
+"failures" in the aggregated stats the scoreboard reads.
 """
 
 from __future__ import annotations
@@ -100,34 +100,3 @@ def _log_plan(environment, **_kwargs):
             f"{stage['users']:>5} users  "
             f"{stage['duration_s']:>3}s{marker}"
         )
-
-
-@events.init.add_listener
-def _enable_master_response_times_cache(environment, **_kwargs):
-    """Force-enable the response-times cache on the master.
-
-    With `--processes N`, Locust runs one master + N workers. The
-    master's RequestStats defaults to `use_response_times_cache=False`
-    (it normally just aggregates worker reports, not raw samples). But
-    we pass `--csv-full-history`, which makes the stats_history.csv
-    writer call `get_current_response_time_percentile()` on master-side
-    StatsEntry objects every tick — and that raises ValueError when
-    the cache is off, killing the writer greenlet on its first tick.
-
-    Net effect of the crash: stats_history.csv ends up empty and the
-    per-stage breakdown in the PR report silently degrades to zeros
-    (the aggregated headline numbers come from a different CSV and
-    keep working).
-
-    Flipping the flag back on lets worker reports populate the
-    master's cache via StatsEntry.extend(), and the writer stops
-    crashing every second. No-op on workers — they already have it on.
-    """
-    runner = environment.runner
-    if runner is None:
-        return
-    stats = runner.stats
-    stats.use_response_times_cache = True
-    stats.total.use_response_times_cache = True
-    for entry in stats.entries.values():
-        entry.use_response_times_cache = True

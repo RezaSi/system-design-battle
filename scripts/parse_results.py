@@ -6,12 +6,10 @@ Used by scripts/run_benchmark.sh in three modes:
 1. --pytest-junit + --coverage-out
        Parse the JUnit XML produced by pytest into coverage.json.
 
-2. --locust-csv + --locust-history + --config + --benchmark-out
-       Parse the Locust aggregated CSV (per-endpoint summary) plus the
-       per-second history CSV (per-stage breakdown), combine with the
-       challenge config (load_stages, for the per-stage table only),
-       and emit benchmark.json with aggregated rps + p99_ms + errors
-       plus per_endpoint[] and per_stage[] for the PR report.
+2. --locust-csv + --benchmark-out
+       Parse the Locust aggregated CSV (per-endpoint summary plus the
+       Aggregated final row) and emit benchmark.json with aggregated
+       rps + p50/p90/p99 + errors plus per_endpoint[] for the PR report.
 
 3. --coverage + --benchmark + --challenge + --submission + --report-out
        Combine the two JSONs into the benchmark-report.md that the PR
@@ -22,7 +20,7 @@ The scoreboard ranks submissions on three axes:
   2. rps           (descending)  — throughput
   3. p99_ms        (ascending)   — tail latency
 
-That's it. No SLO, no letter grade.
+That's it. No SLO, no letter grade, no per-stage breakdown.
 """
 
 from __future__ import annotations
@@ -35,8 +33,6 @@ import sys
 import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import Any
-
-import yaml
 
 
 # ---------------------------------------------------------------------------
@@ -112,43 +108,6 @@ def _num(value: Any, cast=float, default=0):
         return default
 
 
-# Reasonable physical bounds for cells in Locust's stats_history.csv.
-# Anything outside these ranges is almost certainly a row that got
-# corrupted by the multi-process writer (column shift, partial flush).
-_LATENCY_MAX_MS = 600_000  # 10 minutes — clearly bogus for our benches
-_THROUGHPUT_MAX = 1_000_000  # one million req/s on a single-CPU stack: bogus
-
-
-def _is_plausible_history_row(row: dict) -> bool:
-    """Return True only if the row's numeric cells are within physical bounds.
-
-    The expected shape is: Timestamp (epoch seconds), Requests/s,
-    Failures/s, and a handful of percentile columns in milliseconds.
-    Reject the row if any of those is None, negative, or off-the-charts.
-    """
-    ts = _num(row.get("Timestamp"), int, 0)
-    # Plausible Unix epoch second is between 2001-09-09 (10^9) and roughly
-    # the year 5000 (10^11). Anything else is from a column shift.
-    if ts < 10**9 or ts > 10**11:
-        return False
-    for col, ceiling in (
-        ("Requests/s", _THROUGHPUT_MAX),
-        ("Failures/s", _THROUGHPUT_MAX),
-        ("50%", _LATENCY_MAX_MS),
-        ("90%", _LATENCY_MAX_MS),
-        ("99%", _LATENCY_MAX_MS),
-    ):
-        v = row.get(col)
-        if v is None:
-            return False
-        if v == "N/A":
-            continue  # "no data this tick" is a legitimate state
-        num = _num(v, float, None)
-        if num is None or num < 0 or num > ceiling:
-            return False
-    return True
-
-
 def parse_per_endpoint(csv_path: Path) -> tuple[dict, list[dict]]:
     """Parse Locust's final _stats.csv into (aggregated, per_endpoint).
 
@@ -220,156 +179,6 @@ def parse_per_endpoint(csv_path: Path) -> tuple[dict, list[dict]]:
     return summary, per_endpoint
 
 
-def parse_per_stage(history_path: Path, stages: list[dict]) -> list[dict]:
-    """Slice stats_history.csv by stage time-window and compute per-stage metrics.
-
-    Used by the PR report to show how the system degrades under load.
-    Not used by the scoreboard — the scoreboard reads only the
-    aggregated row.
-
-    Strategy:
-      - Filter rows where Name == "Aggregated" and the row passes the
-        physical-bound sanity check.
-      - Group by stage based on elapsed time since the first row.
-      - Drop the first 5 seconds of each stage (ramp-up and connection
-        warm-up are not representative of steady-state behavior).
-      - RPS and error rate are computed from the cumulative
-        `Total Request Count` / `Total Failure Count` columns
-        (delta across the window divided by elapsed seconds). The
-        per-tick `Requests/s` column is sparse on the master in
-        multi-process mode — workers report every few seconds, so
-        most ticks read 0 — and averaging it produces misleadingly
-        low numbers.
-      - p50 / p90 / p99 are averaged across the per-tick
-        percentile snapshots, which DO populate every tick even when
-        the master hasn't received a worker delta yet.
-    """
-    if not stages or not history_path.exists():
-        return []
-
-    with history_path.open() as f:
-        rows = list(csv.DictReader(f))
-
-    # `or ""` defends against partial-write rows where DictReader returns
-    # None for the value (Locust master-side writer occasionally emits one
-    # of those when workers are spawning/shutting down in multi-process
-    # mode).
-    agg_rows = [r for r in rows if (r.get("Name") or "").strip() == "Aggregated"]
-    # Reject rows that look corrupted: partial writes, column-shifted
-    # rows, or otherwise out-of-physical-bound cells. Without this filter
-    # a single bad row can poison `t0`, the per-stage mean, or the
-    # per-stage error rate (e.g. dividing a 1e8 "Failures/s" by a
-    # legitimate 100 "Requests/s" yields a 1e8% error rate in the report).
-    agg_rows = [r for r in agg_rows if _is_plausible_history_row(r)]
-    if not agg_rows:
-        return []
-
-    # Sort by timestamp so window slicing and cumulative-delta math are
-    # both well-defined regardless of CSV row order.
-    agg_rows.sort(key=lambda r: _num(r.get("Timestamp"), int, 0))
-
-    # Multi-process mode interleaves two row populations in the same CSV:
-    # per-worker "Aggregated" snapshots (small cumulative counts) and the
-    # master's true aggregated rows (much larger counts). Mixing them
-    # blows up the cumulative-delta RPS calculation. Filter to the
-    # master rows by keeping only rows whose Total Request Count is
-    # monotonically non-decreasing — worker snapshots break monotonicity
-    # because each worker counts its own slice.
-    monotonic: list[dict] = []
-    running_max = -1
-    for r in agg_rows:
-        cnt = _num(r.get("Total Request Count"), int, 0)
-        if cnt >= running_max:
-            monotonic.append(r)
-            running_max = cnt
-    agg_rows = monotonic
-    if not agg_rows:
-        return []
-
-    timestamps = [int(_num(r.get("Timestamp"), int, 0)) for r in agg_rows]
-    t0 = min(timestamps)
-
-    cumulative = 0
-    results: list[dict] = []
-    for stage in stages:
-        name = stage.get("name", "stage")
-        duration = int(stage.get("duration_s", 0))
-        users = int(stage.get("users", 0))
-        scored = bool(stage.get("scored", True))
-        start = cumulative
-        end = cumulative + duration
-        cumulative = end
-
-        # Window includes [start + 5, end). The 5s skip lets the user
-        # count stabilise after the previous stage's spawn-rate ramp and
-        # gives connection pools / JIT a chance to warm up.
-        window_start = t0 + start + 5
-        window_end = t0 + end
-
-        in_window = [
-            r for r, ts in zip(agg_rows, timestamps)
-            if window_start <= ts < window_end
-        ]
-
-        if not in_window:
-            results.append(
-                {
-                    "name": name,
-                    "users": users,
-                    "duration_s": duration,
-                    "scored": scored,
-                    "samples": 0,
-                    "rps": 0.0,
-                    "p50_ms": 0,
-                    "p90_ms": 0,
-                    "p99_ms": 0,
-                    "error_rate_pct": 0.0,
-                }
-            )
-            continue
-
-        # RPS and error rate from cumulative counters: delta across the
-        # window divided by elapsed seconds. This is immune to the
-        # master-side "Requests/s" sparsity in --csv-full-history mode.
-        first, last = in_window[0], in_window[-1]
-        first_ts = _num(first.get("Timestamp"), int, 0)
-        last_ts = _num(last.get("Timestamp"), int, 0)
-        elapsed = max(last_ts - first_ts, 1)
-        first_reqs = _num(first.get("Total Request Count"), int, 0)
-        last_reqs = _num(last.get("Total Request Count"), int, 0)
-        first_fails = _num(first.get("Total Failure Count"), int, 0)
-        last_fails = _num(last.get("Total Failure Count"), int, 0)
-        d_reqs = max(last_reqs - first_reqs, 0)
-        d_fails = max(last_fails - first_fails, 0)
-        rps = d_reqs / elapsed
-        err_pct = (d_fails / d_reqs * 100) if d_reqs > 0 else 0.0
-
-        p50_values = [_num(r.get("50%"), int, 0) for r in in_window]
-        p90_values = [_num(r.get("90%"), int, 0) for r in in_window]
-        p99_values = [_num(r.get("99%"), int, 0) for r in in_window]
-
-        def _mean(xs):
-            return int(round(sum(xs) / len(xs))) if xs else 0
-
-        results.append(
-            {
-                "name": name,
-                "users": users,
-                "duration_s": duration,
-                "scored": scored,
-                "samples": len(in_window),
-                "rps": round(rps, 2),
-                "p50_ms": _mean(p50_values),
-                "p90_ms": _mean(p90_values),
-                "p99_ms": _mean(p99_values),
-                # Worst per-window p99 — surfaced for debugging.
-                "p99_max_ms": max(p99_values) if p99_values else 0,
-                "error_rate_pct": round(err_pct, 2),
-            }
-        )
-    return results
-
-
 # ---------------------------------------------------------------------------
 # Report rendering
 # ---------------------------------------------------------------------------
@@ -396,18 +205,6 @@ def render_report(coverage: dict, benchmark: dict, challenge: str, submission: s
     total_requests = benchmark.get("total_requests", 0)
     failures = benchmark.get("failures", 0)
 
-    # Per-stage table — kept as diagnostic information.
-    stage_rows = []
-    for stage in benchmark.get("per_stage", []):
-        scored_marker = "" if stage.get("scored", True) else " _(warmup)_"
-        stage_rows.append(
-            f"| {stage['name']}{scored_marker} | {stage['users']} | "
-            f"{stage['rps']:.0f} | {stage['p50_ms']} | {stage['p90_ms']} | "
-            f"{stage['p99_ms']} | {stage['error_rate_pct']:.2f}% |"
-        )
-    stage_table = "\n".join(stage_rows) if stage_rows else "| — | — | — | — | — | — | — |"
-
-    # Per-endpoint table
     endpoint_rows = []
     for ep in benchmark.get("per_endpoint", []):
         endpoint_rows.append(
@@ -430,15 +227,6 @@ Submission: `{submission_user}`
 | Tail latency | p50 = **{p50_ms} ms**, p90 = **{p90_ms} ms**, p99 = **{p99_ms} ms** |
 | Errors | **{err_pct:.2f}%** ({failures} failed requests) |
 
-### Load curve
-
-Each row is a stage from the staged load profile (diagnostic only —
-the scoreboard uses the aggregated row across the whole run).
-
-| Stage | Users | RPS | p50 (ms) | p90 (ms) | p99 (ms) | Errors |
-|-------|------:|----:|---------:|---------:|---------:|-------:|
-{stage_table}
-
 ### Per-endpoint summary (whole run)
 
 | Endpoint | Requests | Failures | RPS | p50 (ms) | p90 (ms) | p99 (ms) |
@@ -458,8 +246,6 @@ def main() -> int:
     p.add_argument("--pytest-junit", type=Path)
     p.add_argument("--coverage-out", type=Path)
     p.add_argument("--locust-csv", type=Path)
-    p.add_argument("--locust-history", type=Path)
-    p.add_argument("--config", type=Path)
     p.add_argument("--benchmark-out", type=Path)
     p.add_argument("--coverage", type=Path)
     p.add_argument("--benchmark", type=Path)
@@ -476,18 +262,9 @@ def main() -> int:
 
     if args.locust_csv and args.benchmark_out:
         aggregated, per_endpoint = parse_per_endpoint(args.locust_csv)
-
-        stages = []
-        if args.config and args.config.exists():
-            cfg = yaml.safe_load(args.config.read_text()) or {}
-            stages = cfg.get("load_stages") or []
-
-        per_stage = parse_per_stage(args.locust_history, stages) if args.locust_history else []
-
         data = {
             **aggregated,
             "per_endpoint": per_endpoint,
-            "per_stage": per_stage,
         }
         args.benchmark_out.write_text(json.dumps(data, indent=2))
         print(f"Wrote benchmark to {args.benchmark_out}")
